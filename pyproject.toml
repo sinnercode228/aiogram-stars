@@ -55,7 +55,9 @@ Changelog = "https://github.com/sinnercode228/aiogram-stars/blob/main/CHANGELOG.
 packages = ["src/aiogram_stars"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/aiogram_stars", "tests", "examples", "CHANGELOG.md", "README.md", "LICENSE"]
+include = [
+  "src/aiogram_stars", "tests", "examples", "CHANGELOG.md", "README.md", "README.ru.md", "LICENSE",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
