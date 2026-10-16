@@ -23,8 +23,9 @@ All notable changes to this project are documented here. The format follows
 - Successful payments are recorded once per `telegram_payment_charge_id`; `on_paid` runs once
   per charge, also for redelivered updates and for several bot processes on one database.
   `RejectPayment` from `on_paid` marks the payment rejected and queues a refund in the same
-  storage transaction. A payment left behind by a process that died is handled again by a
-  redelivered update once its lease (`payment_lease`) runs out.
+  storage transaction. Shutdown waits up to `payment_lease` for the `on_paid` calls that are
+  running, since Telegram does not send their updates again. A payment left behind by a process
+  that died is handled again by a redelivered update once its lease (`payment_lease`) runs out.
 - Refund outbox: refunds (compensating, and manual through `StarsPayments.refund`) are stored
   first and sent by a background task with exponential backoff (`RefundPolicy`), at most one
   refund per charge, claimed with a lease so two workers never send it at the same time.

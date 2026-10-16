@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 from aiogram import Bot, Dispatcher, F, Router
@@ -19,6 +20,7 @@ from aiogram_stars import (
     MemoryStorage,
     PayloadSigner,
     Payment,
+    PaymentStatus,
     Refund,
     RefundPolicy,
     RefundStatus,
@@ -278,3 +280,80 @@ async def test_handlers_on_the_router_itself_still_run_first(bot: Bot) -> None:
 
     assert legacy == ["old"]
     assert await stars.get_payment("old") is None
+
+
+async def start_polling_with_a_payment(dp: Dispatcher, bot: Bot, session: FakeSession) -> Any:
+    raw = payment_update(bot, PAYLOAD, 100).model_dump(mode="json", by_alias=True)
+    await session.updates.put(raw)
+    return asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+
+
+async def test_shutdown_waits_for_a_payment_being_handled(bot: Bot, session: FakeSession) -> None:
+    # dp.run_polling() ends in asyncio.run(), which cancels the handlers still running, and
+    # Telegram does not send the update again: on_paid would be cut off for good.
+    started = asyncio.Event()
+
+    async def on_paid(payment: Payment) -> None:
+        started.set()
+        await asyncio.sleep(0.2)
+
+    stars = make_stars(on_paid=on_paid, refunds=QUIET)
+    dp = Dispatcher()
+    stars.setup(dp)
+    polling = await start_polling_with_a_payment(dp, bot, session)
+    await asyncio.wait_for(started.wait(), 2)
+
+    await dp.stop_polling()
+    await polling
+
+    payment = await stars.get_payment("charge-1")
+    assert payment is not None
+    assert payment.status is PaymentStatus.ACCEPTED
+
+
+async def test_shutdown_stops_waiting_for_a_payment_after_the_lease(
+    bot: Bot, session: FakeSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    started = asyncio.Event()
+    handlers: list[asyncio.Task[Any]] = []
+
+    async def on_paid(payment: Payment) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        handlers.append(task)
+        started.set()
+        await asyncio.sleep(30)
+
+    stars = make_stars(on_paid=on_paid, refunds=QUIET, payment_lease=timedelta(milliseconds=100))
+    dp = Dispatcher()
+    stars.setup(dp)
+    polling = await start_polling_with_a_payment(dp, bot, session)
+    await asyncio.wait_for(started.wait(), 2)
+
+    began = asyncio.get_running_loop().time()
+    with caplog.at_level(logging.ERROR, logger="aiogram_stars"):
+        await dp.stop_polling()
+        await polling
+
+    assert asyncio.get_running_loop().time() - began < 2
+    assert "payment charge-1 is still being handled at shutdown" in caplog.text
+    for task in handlers:
+        task.cancel()
+    await asyncio.gather(*handlers, return_exceptions=True)
+
+
+async def test_stop_inside_on_paid_does_not_wait_for_itself(bot: Bot) -> None:
+    stars: StarsPayments
+
+    async def on_paid(payment: Payment) -> None:
+        await stars.stop()
+
+    stars = make_stars(on_paid=on_paid, payment_lease=timedelta(seconds=30))
+    dp = Dispatcher()
+    stars.setup(dp)
+
+    await asyncio.wait_for(dp.feed_update(bot, payment_update(bot, PAYLOAD, 100)), 2)
+
+    payment = await stars.get_payment("charge-1")
+    assert payment is not None
+    assert payment.status is PaymentStatus.ACCEPTED

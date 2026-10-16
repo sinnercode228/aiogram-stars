@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.types import LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import LabeledPrice, Message, PreCheckoutQuery, SuccessfulPayment
 
 from ._callbacks import Callback, CallbackFunc
 from ._errors import InvalidPayload, RejectPayment
@@ -108,7 +108,8 @@ class StarsPayments:
         checkout_error: What the buyer reads when a payload does not verify, ``check`` is too
             slow, or ``check`` fails with an error other than :class:`RejectPayment`.
         payment_lease: How long a payment being handled is held by the process handling it. If
-            that process dies, a redelivered update runs ``on_paid`` again after this time.
+            that process dies, a redelivered update runs ``on_paid`` again after this time. It is
+            also the longest :meth:`stop` waits for the payments being handled.
         refunds: Retry settings of the refund outbox.
         clock: Returns the current time as an aware datetime. Tests pass their own.
     """
@@ -143,6 +144,8 @@ class StarsPayments:
         self._checkout_error = checkout_error
         self._payment_lease = payment_lease
         self._clock = clock
+        # The tasks running _on_successful_payment, so that stop() can wait for them.
+        self._handling: dict[object, tuple[asyncio.Task[Any], str]] = {}
         self._outbox = RefundOutbox(
             storage,
             RefundPolicy() if refunds is None else refunds,
@@ -208,8 +211,30 @@ class StarsPayments:
         await self._outbox.start(bot, data)
 
     async def stop(self) -> None:
-        """Stop the background refunds, after the attempt in flight. Does nothing if stopped."""
+        """Wait for the payments being handled, then stop the background refunds.
+
+        The dispatcher calls this on shutdown. ``on_paid`` calls that are running get up to
+        ``payment_lease`` to finish, because once the process exits Telegram does not send
+        their updates again. The refund outbox stops after the attempt in flight. Does nothing
+        if stopped.
+        """
+        await self._wait_for_payments()
         await self._outbox.stop()
+
+    async def _wait_for_payments(self) -> None:
+        current = asyncio.current_task()
+        handlers = {task: charge for task, charge in self._handling.values() if task is not current}
+        if not handlers:
+            return
+        log.info("waiting for %d payment(s) being handled to finish", len(handlers))
+        _, pending = await asyncio.wait(handlers, timeout=self._payment_lease.total_seconds())
+        for task in pending:
+            log.error(
+                "payment %s is still being handled at shutdown; if the process exits now, "
+                "on_paid is cut off and the payment stays %s",
+                handlers[task],
+                PaymentStatus.PROCESSING.value,
+            )
 
     async def _on_startup(self, **data: Any) -> None:  # noqa: ANN401 - handler data
         bot = data.pop("bot", None)
@@ -415,6 +440,20 @@ class StarsPayments:
         paid = message.successful_payment
         if paid is None:  # pragma: no cover - the filter lets only payments through
             return
+        handler = asyncio.current_task()
+        if handler is None:  # pragma: no cover - aiogram runs handlers in tasks
+            await self._handle_payment(message, paid, data)
+            return
+        key = object()  # one per call: a handler may feed another update from its own task
+        self._handling[key] = (handler, paid.telegram_payment_charge_id)
+        try:
+            await self._handle_payment(message, paid, data)
+        finally:
+            del self._handling[key]
+
+    async def _handle_payment(
+        self, message: Message, paid: SuccessfulPayment, data: dict[str, Any]
+    ) -> None:
         now = self._clock()
         try:
             order_id, rejection = self._signer.verify(paid.invoice_payload, paid.total_amount), None
