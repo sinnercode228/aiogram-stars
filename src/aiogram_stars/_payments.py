@@ -133,6 +133,9 @@ class StarsPayments:
         if not 0 < checkout_timeout < _BOT_API_DEADLINE:
             msg = "checkout_timeout must be more than 0 and less than 10 seconds"
             raise ValueError(msg)
+        if not checkout_error.strip():
+            msg = "checkout_error must not be blank: Telegram shows it to the buyer"
+            raise ValueError(msg)
         if payment_lease <= timedelta(0):
             msg = "payment_lease must be positive"
             raise ValueError(msg)

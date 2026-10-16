@@ -272,6 +272,13 @@ def test_checkout_timeout_must_leave_time_to_answer_within_10_seconds(timeout: f
         make_stars(checkout_timeout=timeout)
 
 
+@pytest.mark.parametrize("message", ["", "   "])
+def test_checkout_error_must_not_be_blank(message: str) -> None:
+    # The Bot API needs error_message whenever ok is False.
+    with pytest.raises(ValueError, match="checkout_error"):
+        make_stars(checkout_error=message)
+
+
 def test_default_checkout_timeout_is_under_the_bot_api_deadline() -> None:
     assert 0 < make_stars().checkout_timeout < 10
 
