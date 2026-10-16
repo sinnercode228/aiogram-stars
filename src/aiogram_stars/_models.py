@@ -22,6 +22,10 @@ class PaymentStatus(str, Enum):
     ERROR = "error"
     """``on_paid`` raised another exception. Nothing is refunded; a person has to look at it."""
 
+    def __str__(self) -> str:
+        """Return the value, as ``format()`` does on every Python version."""
+        return self.value
+
 
 class RefundStatus(str, Enum):
     """Where a refund is in the outbox."""
@@ -32,6 +36,10 @@ class RefundStatus(str, Enum):
     """Telegram returned the Stars (or said they had been returned already)."""
     FAILED = "failed"
     """Every attempt failed. ``on_refund_failed`` was called; a person has to look at it."""
+
+    def __str__(self) -> str:
+        """Return the value, as ``format()`` does on every Python version."""
+        return self.value
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
