@@ -499,3 +499,36 @@ class StarsPayments:
         own, or in tests.
         """
         return await self._outbox.send_due(bot)
+
+    # -- subscriptions -------------------------------------------------------------------------
+
+    async def cancel_subscription(
+        self,
+        bot: Bot,
+        charge_id: str,
+        *,
+        user_id: int | None = None,
+        is_canceled: bool = True,
+    ) -> None:
+        """Stop a Stars subscription from renewing (``editUserStarSubscription``).
+
+        The subscription stays active until the end of the period that is paid for.
+
+        Args:
+            bot: The bot the subscription was paid to.
+            charge_id: ``telegram_payment_charge_id`` of a payment of the subscription.
+            user_id: The subscriber. Needed only for a payment this storage has no record of.
+            is_canceled: ``False`` lets the user renew a subscription the bot canceled.
+
+        Raises:
+            LookupError: The payment is not recorded and ``user_id`` is not given.
+        """
+        if user_id is None:
+            payment = await self._storage.get_payment(charge_id)
+            if payment is None:
+                msg = f"no payment {charge_id!r} is recorded; pass user_id"
+                raise LookupError(msg)
+            user_id = payment.user_id
+        await bot.edit_user_star_subscription(
+            user_id=user_id, telegram_payment_charge_id=charge_id, is_canceled=is_canceled
+        )
