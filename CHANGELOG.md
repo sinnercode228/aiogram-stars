@@ -16,8 +16,10 @@ All notable changes to this project are documented here. The format follows
   bound to the amount; `PayloadSigner` signs and verifies them, with `previous_secrets` for key
   rotation.
 - Pre-checkout: forged payloads and amounts are declined before the `check` callback runs;
-  `check` can decline with `RejectPayment(reason)`; a check slower than `checkout_timeout`
-  (8 s by default) is cancelled and the query is declined before Telegram's 10-second deadline.
+  `check` approves by returning nothing and declines with `RejectPayment(reason)` (any other
+  return value declines too); a check slower than `checkout_timeout` (8 s by default) is
+  cancelled and the query is declined before Telegram's 10-second deadline, also when the check
+  is slow to stop.
 - Successful payments are recorded once per `telegram_payment_charge_id`; `on_paid` runs once
   per charge, also for redelivered updates and for several bot processes on one database.
   `RejectPayment` from `on_paid` marks the payment rejected and queues a refund in the same

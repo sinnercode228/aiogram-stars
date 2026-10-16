@@ -43,10 +43,14 @@ class Callback:
         self._names = frozenset(p.name for p in params[1:] if p.kind in _NAMED)
         self._takes_all = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
-    async def __call__(self, subject: object, data: Mapping[str, Any]) -> None:
-        """Call the callback with ``subject`` and the parts of ``data`` it asks for."""
+    async def __call__(self, subject: object, data: Mapping[str, Any]) -> object:
+        """Call the callback with ``subject`` and the parts of ``data`` it asks for.
+
+        Returns:
+            What the callback returned.
+        """
         if self._takes_all:
             kwargs = {name: value for name, value in data.items() if name != self._first}
         else:
             kwargs = {name: value for name, value in data.items() if name in self._names}
-        await self._func(subject, **kwargs)
+        return await self._func(subject, **kwargs)

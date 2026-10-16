@@ -58,11 +58,11 @@ class _Verdict(NamedTuple):
     ok: bool
     error: str | None = None
     order_id: str = ""
-    late_check: asyncio.Task[None] | None = None
+    late_check: asyncio.Task[object] | None = None
     """The check, if it was cancelled at the deadline and may still be running."""
 
 
-async def _outlast(check: asyncio.Task[None], order_id: str) -> None:
+async def _outlast(check: asyncio.Task[object], order_id: str) -> None:
     """Wait, after the query is answered, for a check that was cancelled at the deadline."""
     await asyncio.wait({check})
     if not check.cancelled():
@@ -94,9 +94,11 @@ class StarsPayments:
         secret: The key that signs invoice payloads, at least 16 bytes.
         on_paid: ``async (payment: Payment, ...)``, called once per successful payment. Raise
             :class:`RejectPayment` to refund the payment.
-        check: ``async (checkout: Checkout, ...)``, called for a pre-checkout query whose payload
-            verified. Raise :class:`RejectPayment` to decline it. Without it, every payload this
-            bot signed is approved.
+        check: ``async (checkout: Checkout, ...) -> None``, called for a pre-checkout query whose
+            payload verified. Return nothing to approve the payment and raise
+            :class:`RejectPayment` to decline it; any other return value, ``False`` included,
+            declines it too and is logged as an error. Without it, every payload this bot
+            signed is approved.
         on_refunded: ``async (refund: Refund, ...)``, called when a refund went through.
         on_refund_failed: ``async (refund: Refund, ...)``, called when a refund ran out of
             attempts and needs a person.
@@ -388,6 +390,17 @@ class StarsPayments:
                 order_id,
                 query_id,
                 exc_info=error,
+            )
+            return _Verdict(ok=False, error=self._checkout_error, order_id=order_id)
+        returned = task.result()
+        if returned is not None:
+            # Fail closed: a check that returns False to decline must not approve the payment.
+            log.error(
+                "check for order %s returned %r; declined pre-checkout query %s. A check returns "
+                "nothing to approve a payment and must raise RejectPayment to decline it",
+                order_id,
+                returned,
+                query_id,
             )
             return _Verdict(ok=False, error=self._checkout_error, order_id=order_id)
         return _Verdict(ok=True, order_id=order_id)

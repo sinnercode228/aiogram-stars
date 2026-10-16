@@ -99,6 +99,24 @@ async def test_check_can_reject_with_a_reason_for_the_buyer(bot: Bot, session: F
     assert answer(session) == (False, "The price has changed, please order again")
 
 
+@pytest.mark.parametrize("returned", [False, True, 0, "Sold out"])
+async def test_check_that_returns_a_value_declines_the_query(
+    bot: Bot, session: FakeSession, caplog: pytest.LogCaptureFixture, returned: object
+) -> None:
+    # A check that returns False to decline would otherwise approve the payment.
+    async def check(checkout: Checkout) -> object:
+        return returned
+
+    dp = dispatcher(make_stars(check=check, checkout_error="Payments are paused"))
+
+    with caplog.at_level(logging.ERROR, logger="aiogram_stars"):
+        await dp.feed_update(bot, pre_checkout_update(bot, SIGNER.sign("order-1", 10), 10))
+
+    assert answer(session) == (False, "Payments are paused")
+    assert f"check for order order-1 returned {returned!r}" in caplog.text
+    assert "raise RejectPayment" in caplog.text
+
+
 async def test_check_that_crashes_declines_with_the_generic_error(
     bot: Bot, session: FakeSession, caplog: pytest.LogCaptureFixture
 ) -> None:
