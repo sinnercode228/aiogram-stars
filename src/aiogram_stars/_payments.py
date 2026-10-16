@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from aiogram import Bot, F, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import LabeledPrice, Message, PreCheckoutQuery
 
 from ._callbacks import Callback, CallbackFunc
@@ -66,8 +66,7 @@ class StarsPayments:
     Callbacks are async and are called like aiogram handlers: the first argument is the object
     they handle, and they get any keyword argument they name from the handler data (``bot``,
     ``event_from_user``, values set by middlewares or passed to the ``Dispatcher``). ``on_paid``
-    also gets ``message``. The outbox callbacks get ``bot`` and the data the dispatcher started
-    with.
+    also gets ``message``. The outbox callbacks get ``bot`` and the dispatcher's data.
 
     Args:
         storage: Where payments and refunds are kept.
@@ -168,6 +167,8 @@ class StarsPayments:
             RuntimeError: This object was set up on a router already.
         """
         router.include_router(self._router)
+        if isinstance(router, Dispatcher):
+            self._outbox.share(router.workflow_data)
 
     async def start(self, bot: Bot, **data: Any) -> None:  # noqa: ANN401 - handler data
         """Start sending refunds in the background with ``bot``.

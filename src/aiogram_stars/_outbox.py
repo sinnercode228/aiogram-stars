@@ -52,6 +52,7 @@ class RefundOutbox:
         self._clock = clock
         self._on_refunded = on_refunded
         self._on_refund_failed = on_refund_failed
+        self._shared: Mapping[str, Any] = {}
         self._data: dict[str, Any] = {}
         self._task: asyncio.Task[None] | None = None
         self._wakeup: asyncio.Event | None = None
@@ -61,6 +62,10 @@ class RefundOutbox:
     def running(self) -> bool:
         """Whether the background task is running."""
         return self._task is not None and not self._task.done()
+
+    def share(self, data: Mapping[str, Any]) -> None:
+        """Pass ``data`` (the dispatcher's workflow data) to the callbacks of every sweep."""
+        self._shared = data
 
     def wake(self) -> None:
         """Look for due refunds now rather than at the next interval."""
@@ -174,7 +179,7 @@ class RefundOutbox:
             )
             return None
 
-        data = {**self._data, "bot": bot}
+        data = {**self._shared, **self._data, "bot": bot}
         if finished.status is RefundStatus.DONE:
             log.info("refunded charge %s to user %s", finished.charge_id, finished.user_id)
             await self._notify(self._on_refunded, "on_refunded", finished, data)

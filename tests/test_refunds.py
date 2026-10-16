@@ -371,3 +371,20 @@ async def test_attempt_that_outlives_its_lease_is_not_recorded_twice(
 
     assert (taken_over.status, taken_over.attempts) == (RefundStatus.DONE, 2)
     assert "the lease of the refund of charge charge-1 ran out during attempt 1" in caplog.text
+
+
+async def test_sweeps_run_by_hand_give_callbacks_the_dispatcher_data(
+    bot: Bot, clock: Clock
+) -> None:
+    seen: list[str] = []
+
+    async def on_refunded(refund: Refund, shop: str) -> None:
+        seen.append(shop)
+
+    stars = make_stars(on_paid=reject, clock=clock, on_refunded=on_refunded)
+    stars.setup(Dispatcher(shop="coffee shop"))
+    await stars.refund("a", user_id=1)
+
+    await stars.send_due_refunds(bot)
+
+    assert seen == ["coffee shop"]
