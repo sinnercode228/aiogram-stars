@@ -75,7 +75,7 @@ class PayloadSigner:
             msg = f"order_id must be at most {self.MAX_ORDER_ID_BYTES} bytes in UTF-8"
             raise ValueError(msg)
         _check_amount(amount)
-        return f"{order}.{self._tag(self._keys[0], order, amount)}"
+        return f"{order}.{self._tag(self._keys[0], order, amount).decode()}"
 
     def verify(self, payload: str, amount: int) -> str:
         """Return the order id of ``payload`` if it was signed for ``amount`` Stars.
@@ -88,14 +88,16 @@ class PayloadSigner:
         if not dot or not order.strip() or len(tag) != _TAG_CHARS:
             msg = "the payload is not an aiogram-stars payload"
             raise InvalidPayload(msg)
+        # Bytes, because compare_digest raises TypeError for a str with non-ASCII characters.
+        received = tag.encode()
         for key in self._keys:
-            if hmac.compare_digest(tag, self._tag(key, order, amount)):
+            if hmac.compare_digest(received, self._tag(key, order, amount)):
                 return order
         msg = "the payload signature does not match"
         raise InvalidPayload(msg)
 
     @staticmethod
-    def _tag(key: bytes, order: str, amount: int) -> str:
+    def _tag(key: bytes, order: str, amount: int) -> bytes:
         message = b"\n".join((_DOMAIN, str(amount).encode(), order.encode()))
         digest = hmac.new(key, message, hashlib.sha256).digest()[:_TAG_BYTES]
-        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        return base64.urlsafe_b64encode(digest).rstrip(b"=")

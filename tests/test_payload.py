@@ -91,6 +91,8 @@ def test_payload_signed_with_another_secret_is_rejected(signer: PayloadSigner) -
         "order-1.not-a-tag",
         "order-1.AAAAAAAAAAAAAAAAAAAAAA",
         "order-1.AAAAAAAAAAAAAAAAAAAAAA==",
+        "order-1." + "ё" * 22,  # the right length, but not base64
+        "order-1.AAAAAAAAAAAAAAAAAAAAA\u00e9",
     ],
 )
 def test_malformed_payloads_are_rejected(signer: PayloadSigner, payload: str) -> None:

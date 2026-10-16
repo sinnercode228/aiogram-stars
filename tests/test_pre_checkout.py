@@ -63,6 +63,7 @@ async def test_without_a_check_every_signed_payload_is_approved(
         ("order-1", 150),  # not signed at all
         (PayloadSigner("someone-else's-secret-key").sign("order-1", 150), 150),
         (SIGNER.sign("order-1", 150), 1),  # signed for another amount
+        ("order-1." + "ё" * 22, 150),  # a tag of the right length that is not base64
     ],
 )
 async def test_forged_payload_is_declined_without_calling_the_check(

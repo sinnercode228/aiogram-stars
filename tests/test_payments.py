@@ -169,6 +169,20 @@ async def test_payment_with_a_payload_that_does_not_verify_is_refunded(
     assert "payload did not verify" in caplog.text
 
 
+async def test_payment_with_a_non_ascii_payload_is_refunded(bot: Bot, storage: Storage) -> None:
+    shop = Shop()
+    stars = make_stars(storage, on_paid=shop.accept)
+    dp = dispatcher(stars)
+
+    await dp.feed_update(bot, payment_update(bot, "заказ-1." + "ё" * 22, 100))
+
+    assert shop.paid == []
+    payment = await stars.get_payment("charge-1")
+    assert payment is not None
+    assert payment.status is PaymentStatus.REJECTED
+    assert await stars.get_refund("charge-1") is not None
+
+
 async def test_on_paid_error_marks_the_payment_and_reaches_aiogram(
     bot: Bot, storage: Storage
 ) -> None:
