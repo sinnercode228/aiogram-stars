@@ -183,13 +183,19 @@ class StarsPayments:
 
         Adds a sub-router with the pre-checkout and successful-payment handlers for ``XTR``, and
         starts and stops the refund outbox with the dispatcher (polling, or a webhook app set
-        up with ``setup_application(app, dispatcher, bot=bot)``). Handlers registered on
-        ``router`` itself run first, so a bot can still handle some Stars invoices on its own.
+        up with ``setup_application(app, dispatcher, bot=bot)``).
+
+        The sub-router goes before the routers included in ``router`` so far, so a catch-all
+        handler in one of them, such as an "unknown command" reply, cannot swallow payments.
+        Handlers registered on ``router`` itself still run first, so a bot can handle some
+        Stars invoices on its own there.
 
         Raises:
             RuntimeError: This object was set up on a router already.
         """
         router.include_router(self._router)
+        router.sub_routers.remove(self._router)
+        router.sub_routers.insert(0, self._router)
         if isinstance(router, Dispatcher):
             self._outbox.share(router.workflow_data)
 

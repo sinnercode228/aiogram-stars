@@ -8,8 +8,9 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import pytest
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.methods import AnswerPreCheckoutQuery, RefundStarPayment
+from aiogram.types import Message, PreCheckoutQuery
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -227,3 +228,53 @@ async def test_setup_on_a_router_inside_the_dispatcher(bot: Bot, session: FakeSe
     assert not stars.running
     [answer] = session.calls(AnswerPreCheckoutQuery)
     assert answer.ok is True
+
+
+async def test_catch_all_handlers_in_routers_included_earlier_do_not_swallow_payments(
+    bot: Bot, session: FakeSession
+) -> None:
+    paid: list[Payment] = []
+
+    async def on_paid(payment: Payment) -> None:
+        paid.append(payment)
+
+    stars = make_stars(on_paid=on_paid)
+    fallback = Router(name="fallback")
+
+    @fallback.message()
+    async def unknown_command(message: Message) -> None:
+        return None
+
+    @fallback.pre_checkout_query()
+    async def any_query(query: PreCheckoutQuery) -> None:
+        return None
+
+    dp = Dispatcher()
+    dp.include_router(fallback)
+    stars.setup(dp)
+
+    await dp.feed_update(bot, pre_checkout_update(bot, PAYLOAD, 100))
+    await dp.feed_update(bot, payment_update(bot, PAYLOAD, 100))
+
+    [answer] = session.calls(AnswerPreCheckoutQuery)
+    assert answer.ok is True
+    assert [payment.charge_id for payment in paid] == ["charge-1"]
+    assert dp.sub_routers[-1] is fallback, "the other routers keep their order"
+
+
+async def test_handlers_on_the_router_itself_still_run_first(bot: Bot) -> None:
+    legacy: list[str] = []
+    stars = make_stars()
+    dp = Dispatcher()
+
+    @dp.message(F.successful_payment.invoice_payload.startswith("legacy:"))
+    async def legacy_payment(message: Message) -> None:
+        assert message.successful_payment is not None
+        legacy.append(message.successful_payment.telegram_payment_charge_id)
+
+    stars.setup(dp)
+
+    await dp.feed_update(bot, payment_update(bot, "legacy:order-9", 100, charge_id="old"))
+
+    assert legacy == ["old"]
+    assert await stars.get_payment("old") is None

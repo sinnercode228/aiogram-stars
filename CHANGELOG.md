@@ -9,8 +9,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `StarsPayments`: one object that registers the pre-checkout and successful-payment
-  handlers for `XTR` on an aiogram `Router` or `Dispatcher` and starts and stops the refund
-  outbox with the dispatcher, for polling and webhooks.
+  handlers for `XTR` on an aiogram `Router` or `Dispatcher`, ahead of the routers included
+  there, and starts and stops the refund outbox with the dispatcher, for polling and webhooks.
 - Invoice helpers `send_invoice` and `create_invoice_link` (with `subscription_period`), and
   `make_payload` for other invoice kinds. Payloads carry the order id and an HMAC-SHA256 tag
   bound to the amount; `PayloadSigner` signs and verifies them, with `previous_secrets` for key
