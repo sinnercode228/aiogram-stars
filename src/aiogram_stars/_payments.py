@@ -8,7 +8,7 @@ import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import LabeledPrice, Message, PreCheckoutQuery
@@ -50,6 +50,27 @@ class Checkout:
     amount: int
     user_id: int
     query: PreCheckoutQuery
+
+
+class _Verdict(NamedTuple):
+    """The answer to a pre-checkout query."""
+
+    ok: bool
+    error: str | None = None
+    order_id: str = ""
+    late_check: asyncio.Task[None] | None = None
+    """The check, if it was cancelled at the deadline and may still be running."""
+
+
+async def _outlast(check: asyncio.Task[None], order_id: str) -> None:
+    """Wait, after the query is answered, for a check that was cancelled at the deadline."""
+    await asyncio.wait({check})
+    if not check.cancelled():
+        log.warning(
+            "check for order %s did not stop when it was cancelled at the deadline",
+            order_id,
+            exc_info=check.exception(),
+        )
 
 
 def _expiry(timestamp: int | None) -> datetime | None:
@@ -303,45 +324,73 @@ class StarsPayments:
 
     async def _on_pre_checkout(self, query: PreCheckoutQuery, **data: Any) -> None:  # noqa: ANN401
         bot: Bot = data["bot"]
-        ok, error = await self._decide(query, data)
-        await bot.answer_pre_checkout_query(
-            pre_checkout_query_id=query.id, ok=ok, error_message=error
-        )
+        verdict = await self._decide(query, data)
+        try:
+            await bot.answer_pre_checkout_query(
+                pre_checkout_query_id=query.id, ok=verdict.ok, error_message=verdict.error
+            )
+        finally:
+            if verdict.late_check is not None:
+                await _outlast(verdict.late_check, verdict.order_id)
 
-    async def _decide(
-        self, query: PreCheckoutQuery, data: dict[str, Any]
-    ) -> tuple[bool, str | None]:
+    async def _decide(self, query: PreCheckoutQuery, data: dict[str, Any]) -> _Verdict:
         try:
             order_id = self._signer.verify(query.invoice_payload, query.total_amount)
         except InvalidPayload as exc:
             log.warning(
                 "declined pre-checkout query %s from user %s: %s", query.id, query.from_user.id, exc
             )
-            return False, self._checkout_error
+            return _Verdict(ok=False, error=self._checkout_error)
         if self._check is None:
-            return True, None
+            return _Verdict(ok=True, order_id=order_id)
         checkout = Checkout(
             order_id=order_id, amount=query.total_amount, user_id=query.from_user.id, query=query
         )
+        return await self._run_check(self._check, checkout, data)
+
+    async def _run_check(
+        self, check: Callback, checkout: Checkout, data: dict[str, Any]
+    ) -> _Verdict:
+        order_id, query_id = checkout.order_id, checkout.query.id
+        # A task rather than wait_for, which waits for the cancelled check to stop: a check that
+        # is slow to clean up, or that ignores its cancellation, must not delay the answer.
+        task = asyncio.ensure_future(check(checkout, data))
         try:
-            await asyncio.wait_for(self._check(checkout, data), self._checkout_timeout)
-        except RejectPayment as exc:
-            log.info("check declined order %s: %s", order_id, exc.reason)
-            return False, exc.reason
-        except asyncio.TimeoutError:
+            await asyncio.wait({task}, timeout=self._checkout_timeout)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if not task.done():
+            task.cancel()
             log.error(
                 "check for order %s took longer than %s s; declined pre-checkout query %s",
                 order_id,
                 self._checkout_timeout,
-                query.id,
+                query_id,
             )
-            return False, self._checkout_error
-        except Exception:
-            log.exception(
-                "check for order %s failed; declined pre-checkout query %s", order_id, query.id
+            return _Verdict(
+                ok=False, error=self._checkout_error, order_id=order_id, late_check=task
             )
-            return False, self._checkout_error
-        return True, None
+        if task.cancelled():
+            log.error(
+                "check for order %s was cancelled; declined pre-checkout query %s",
+                order_id,
+                query_id,
+            )
+            return _Verdict(ok=False, error=self._checkout_error, order_id=order_id)
+        error = task.exception()
+        if isinstance(error, RejectPayment):
+            log.info("check declined order %s: %s", order_id, error.reason)
+            return _Verdict(ok=False, error=error.reason, order_id=order_id)
+        if error is not None:
+            log.error(
+                "check for order %s failed; declined pre-checkout query %s",
+                order_id,
+                query_id,
+                exc_info=error,
+            )
+            return _Verdict(ok=False, error=self._checkout_error, order_id=order_id)
+        return _Verdict(ok=True, order_id=order_id)
 
     async def _on_successful_payment(self, message: Message, **data: Any) -> None:  # noqa: ANN401
         paid = message.successful_payment
