@@ -6,7 +6,7 @@
 
 Run it:
 
-    pip install "aiogram-stars[sqlalchemy,sqlite]"
+    pip install "aiogram-stars[sqlite]"
     export BOT_TOKEN=123456:ABC...          # from @BotFather
     export STARS_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
     python examples/shop_bot.py

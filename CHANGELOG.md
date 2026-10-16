@@ -34,7 +34,8 @@ All notable changes to this project are documented here. The format follows
 - Subscriptions: `Payment.is_recurring`, `is_first_recurring` and `subscription_expires_at`,
   and `cancel_subscription` (`editUserStarSubscription`).
 - Storage: the `Storage` protocol, `MemoryStorage`, and `aiogram_stars.sqlalchemy.SqlAlchemyStorage`
-  for SQLite and PostgreSQL (SQLAlchemy 2 async).
+  for SQLite and PostgreSQL (SQLAlchemy 2 async). The extras `sqlite` and `postgres` install
+  SQLAlchemy with the driver; `sqlalchemy` installs SQLAlchemy alone.
 - `examples/shop_bot.py`, a runnable bot with `/buy`, `/refund <charge_id>` and `/paysupport`.
 
 [0.1.0]: https://github.com/sinnercode228/aiogram-stars/releases/tag/v0.1.0

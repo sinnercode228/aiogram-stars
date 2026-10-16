@@ -1,7 +1,8 @@
 """A storage on SQLAlchemy 2 async engines, for SQLite and PostgreSQL.
 
-Install it with ``pip install "aiogram-stars[sqlalchemy]"`` and a driver: ``aiosqlite`` for
-SQLite or ``asyncpg`` for PostgreSQL. The primary keys on ``charge_id`` make a payment and a
+Install it with ``pip install "aiogram-stars[sqlite]"`` (SQLAlchemy and ``aiosqlite``) or
+``pip install "aiogram-stars[postgres]"`` (SQLAlchemy and ``asyncpg``); the ``sqlalchemy`` extra
+alone leaves the driver to you. The primary keys on ``charge_id`` make a payment and a
 refund unique per charge; claims are conditional ``UPDATE`` statements, so any number of bot
 processes can share the database.
 
@@ -14,6 +15,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
+
+try:
+    import sqlalchemy as _sqlalchemy  # noqa: F401 - checks that the extra is installed
+except ModuleNotFoundError as exc:
+    msg = 'aiogram_stars.sqlalchemy needs SQLAlchemy: pip install "aiogram-stars[sqlalchemy]"'
+    raise ModuleNotFoundError(msg, name=exc.name) from exc
 
 from sqlalchemy import (
     BigInteger,
