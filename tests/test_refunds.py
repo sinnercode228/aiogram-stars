@@ -179,6 +179,38 @@ async def test_flood_control_waits_at_least_as_long_as_telegram_asks(
     assert refund.next_attempt_at == clock.now + timedelta(seconds=120)
 
 
+async def test_flood_control_pauses_the_other_refunds_too(
+    bot: Bot, session: FakeSession, storage: Storage, clock: Clock
+) -> None:
+    # Flood control applies to the bot: sending the next refund at once only hits it again.
+    stars = outbox(storage, clock, Desk())
+    await stars.refund("a", user_id=1)
+    clock.advance(seconds=1)
+    await stars.refund("b", user_id=2)
+    session.fail(
+        RefundStarPayment, "Too Many Requests: retry after 120", status=429, retry_after=120
+    )
+
+    [hit] = await stars.send_due_refunds(bot)
+
+    assert (hit.charge_id, hit.status) == ("a", RefundStatus.PENDING)
+    assert len(session.calls(RefundStarPayment)) == 1
+    waiting = await stars.get_refund("b")
+    assert waiting is not None
+    assert waiting.attempts == 0, "the other refund was not tried during the flood wait"
+
+    clock.advance(seconds=119)
+    assert await stars.send_due_refunds(bot) == []
+    assert len(session.calls(RefundStarPayment)) == 1
+
+    clock.advance(seconds=1)
+    sent = await stars.send_due_refunds(bot)
+    assert sorted((refund.charge_id, refund.status) for refund in sent) == [
+        ("a", RefundStatus.DONE),
+        ("b", RefundStatus.DONE),
+    ]
+
+
 async def test_pending_refunds_survive_a_restart(
     bot: Bot, session: FakeSession, sql_backend: str, tmp_path: Path, clock: Clock
 ) -> None:

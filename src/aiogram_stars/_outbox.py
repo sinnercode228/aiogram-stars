@@ -57,6 +57,8 @@ class RefundOutbox:
         self._task: asyncio.Task[None] | None = None
         self._wakeup: asyncio.Event | None = None
         self._stopping = False
+        # Flood control applies to the bot, so a TelegramRetryAfter pauses every refund.
+        self._paused_until: datetime | None = None
 
     @property
     def running(self) -> bool:
@@ -106,6 +108,8 @@ class RefundOutbox:
         sent: list[Refund] = []
         while not (background and self._stop_requested()):
             now = self._clock()
+            if self._paused_until is not None and now < self._paused_until:
+                break
             refund = await self._storage.claim_refund(
                 token=token, now=now, until=now + self._policy.lease
             )
@@ -133,9 +137,8 @@ class RefundOutbox:
     def _stop_requested(self) -> bool:
         return self._stopping
 
-    async def _attempt(self, bot: Bot, refund: Refund, token: str) -> Refund | None:
-        error: str | None = None
-        wait = timedelta(0)
+    async def _send(self, bot: Bot, refund: Refund) -> tuple[str | None, timedelta]:
+        """Call ``refundStarPayment``; return the error, if any, and the flood wait."""
         try:
             await bot.refund_star_payment(
                 user_id=refund.user_id,
@@ -143,18 +146,22 @@ class RefundOutbox:
                 request_timeout=self._policy.request_timeout,
             )
         except TelegramBadRequest as exc:
-            if ALREADY_REFUNDED in exc.message:
-                # An earlier attempt went through, but its answer was lost.
-                log.info("charge %s was refunded already", refund.charge_id)
-            else:
-                error = describe(exc)
+            if ALREADY_REFUNDED not in exc.message:
+                return describe(exc), timedelta(0)
+            # An earlier attempt went through, but its answer was lost.
+            log.info("charge %s was refunded already", refund.charge_id)
         except TelegramRetryAfter as exc:
-            error = describe(exc)
-            wait = timedelta(seconds=exc.retry_after)
+            return describe(exc), timedelta(seconds=exc.retry_after)
         except Exception as exc:  # every other failure is retried
-            error = describe(exc)
+            return describe(exc), timedelta(0)
+        return None, timedelta(0)
 
+    async def _attempt(self, bot: Bot, refund: Refund, token: str) -> Refund | None:
+        error, wait = await self._send(bot, refund)
         now = self._clock()
+        if wait:
+            self._paused_until = now + wait
+            log.warning("flood control: no refunds are sent before %s", self._paused_until)
         if error is None:
             status, next_attempt_at = RefundStatus.DONE, now
         elif refund.attempts >= self._policy.max_attempts:

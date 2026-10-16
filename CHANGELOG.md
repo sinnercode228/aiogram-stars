@@ -28,7 +28,8 @@ All notable changes to this project are documented here. The format follows
 - Refund outbox: refunds (compensating, and manual through `StarsPayments.refund`) are stored
   first and sent by a background task with exponential backoff (`RefundPolicy`), at most one
   refund per charge, claimed with a lease so two workers never send it at the same time.
-  `CHARGE_ALREADY_REFUNDED` counts as done; `on_refunded` and `on_refund_failed` callbacks.
+  `CHARGE_ALREADY_REFUNDED` counts as done; flood control (`retry_after`) pauses every refund,
+  not only the one that hit it; `on_refunded` and `on_refund_failed` callbacks.
 - Subscriptions: `Payment.is_recurring`, `is_first_recurring` and `subscription_expires_at`,
   and `cancel_subscription` (`editUserStarSubscription`).
 - Storage: the `Storage` protocol, `MemoryStorage`, and `aiogram_stars.sqlalchemy.SqlAlchemyStorage`
