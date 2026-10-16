@@ -9,7 +9,7 @@ class InvalidPayload(ValueError):
     """An invoice payload that was not signed with the bot's secret, or not for this amount."""
 
 
-class RejectPayment(Exception):  # noqa: N818 - it reads as an instruction: raise RejectPayment
+class RejectPayment(Exception):
     """Raise from ``check`` or ``on_paid`` to turn a payment down.
 
     From ``check`` the pre-checkout query is answered with ``ok=False`` and ``reason`` is shown to
