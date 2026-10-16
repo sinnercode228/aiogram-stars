@@ -1,0 +1,501 @@
+"""StarsPayments: the aiogram side of Telegram Stars payments."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import secrets
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from aiogram import Bot, F, Router
+from aiogram.types import LabeledPrice, Message, PreCheckoutQuery
+
+from ._callbacks import Callback, CallbackFunc
+from ._errors import InvalidPayload, RejectPayment
+from ._models import Payment, PaymentStatus, Refund, RefundStatus
+from ._outbox import RefundOutbox, describe
+from ._payload import PayloadSigner
+from ._policy import RefundPolicy
+from ._storage import Storage
+from ._time import utcnow
+
+__all__ = ["SUBSCRIPTION_PERIOD", "Checkout", "StarsPayments"]
+
+log = logging.getLogger(__name__)
+
+STARS = "XTR"
+SUBSCRIPTION_PERIOD = timedelta(days=30)
+"""The only subscription period the Bot API accepts at the moment."""
+
+_BOT_API_DEADLINE = 10.0  # seconds Telegram waits for answerPreCheckoutQuery
+_INVALID_PAYLOAD = "the invoice payload did not verify"
+_DEFAULT_CHECKOUT_ERROR = "This payment cannot be completed right now. Please try again later."
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Checkout:
+    """A pre-checkout query whose payload verified, as the ``check`` callback gets it.
+
+    Attributes:
+        order_id: The order id from the payload.
+        amount: The amount in Stars, which the payload is signed for.
+        user_id: The buyer.
+        query: The pre-checkout query itself.
+    """
+
+    order_id: str
+    amount: int
+    user_id: int
+    query: PreCheckoutQuery
+
+
+def _expiry(timestamp: int | None) -> datetime | None:
+    return None if timestamp is None else datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+class StarsPayments:
+    """Telegram Stars payments for an aiogram bot.
+
+    It signs invoice payloads, answers pre-checkout queries before Telegram's 10-second deadline,
+    records every successful payment once per charge and calls ``on_paid`` once for it, and
+    sends refunds from a durable outbox with retries.
+
+    Callbacks are async and are called like aiogram handlers: the first argument is the object
+    they handle, and they get any keyword argument they name from the handler data (``bot``,
+    ``event_from_user``, values set by middlewares or passed to the ``Dispatcher``). ``on_paid``
+    also gets ``message``. The outbox callbacks get ``bot`` and the data the dispatcher started
+    with.
+
+    Args:
+        storage: Where payments and refunds are kept.
+        secret: The key that signs invoice payloads, at least 16 bytes.
+        on_paid: ``async (payment: Payment, ...)``, called once per successful payment. Raise
+            :class:`RejectPayment` to refund the payment.
+        check: ``async (checkout: Checkout, ...)``, called for a pre-checkout query whose payload
+            verified. Raise :class:`RejectPayment` to decline it. Without it, every payload this
+            bot signed is approved.
+        on_refunded: ``async (refund: Refund, ...)``, called when a refund went through.
+        on_refund_failed: ``async (refund: Refund, ...)``, called when a refund ran out of
+            attempts and needs a person.
+        previous_secrets: Keys signed with before ``secret``; their payloads still verify.
+        checkout_timeout: Seconds ``check`` may take. A slower check is cancelled and the query
+            is declined, so the answer still reaches Telegram within 10 seconds.
+        checkout_error: What the buyer reads when a payload does not verify, ``check`` is too
+            slow, or ``check`` fails with an error other than :class:`RejectPayment`.
+        payment_lease: How long a payment being handled is held by the process handling it. If
+            that process dies, a redelivered update runs ``on_paid`` again after this time.
+        refunds: Retry settings of the refund outbox.
+        clock: Returns the current time as an aware datetime. Tests pass their own.
+    """
+
+    def __init__(
+        self,
+        storage: Storage,
+        *,
+        secret: str | bytes,
+        on_paid: CallbackFunc,
+        check: CallbackFunc | None = None,
+        on_refunded: CallbackFunc | None = None,
+        on_refund_failed: CallbackFunc | None = None,
+        previous_secrets: Iterable[str | bytes] = (),
+        checkout_timeout: float = 8.0,
+        checkout_error: str = _DEFAULT_CHECKOUT_ERROR,
+        payment_lease: timedelta = timedelta(minutes=10),
+        refunds: RefundPolicy | None = None,
+        clock: Callable[[], datetime] = utcnow,
+    ) -> None:
+        if not 0 < checkout_timeout < _BOT_API_DEADLINE:
+            msg = "checkout_timeout must be more than 0 and less than 10 seconds"
+            raise ValueError(msg)
+        if payment_lease <= timedelta(0):
+            msg = "payment_lease must be positive"
+            raise ValueError(msg)
+        self._storage = storage
+        self._signer = PayloadSigner(secret, previous_secrets=previous_secrets)
+        self._on_paid = Callback(on_paid, role="on_paid")
+        self._check = None if check is None else Callback(check, role="check")
+        self._checkout_timeout = checkout_timeout
+        self._checkout_error = checkout_error
+        self._payment_lease = payment_lease
+        self._clock = clock
+        self._outbox = RefundOutbox(
+            storage,
+            RefundPolicy() if refunds is None else refunds,
+            clock,
+            on_refunded=None if on_refunded is None else Callback(on_refunded, role="on_refunded"),
+            on_refund_failed=(
+                None
+                if on_refund_failed is None
+                else Callback(on_refund_failed, role="on_refund_failed")
+            ),
+        )
+        self._router = Router(name="aiogram-stars")
+        self._router.pre_checkout_query.register(self._on_pre_checkout, F.currency == STARS)
+        self._router.message.register(
+            self._on_successful_payment, F.successful_payment.currency == STARS
+        )
+        self._router.startup.register(self._on_startup)
+        self._router.shutdown.register(self._on_shutdown)
+
+    def __repr__(self) -> str:
+        storage = type(self._storage).__name__
+        return f"{type(self).__name__}(storage={storage}, running={self.running})"
+
+    @property
+    def checkout_timeout(self) -> float:
+        """Seconds the ``check`` callback may take."""
+        return self._checkout_timeout
+
+    @property
+    def running(self) -> bool:
+        """Whether the refund outbox is running in this process."""
+        return self._outbox.running
+
+    # -- aiogram -------------------------------------------------------------------------------
+
+    def setup(self, router: Router) -> None:
+        """Handle Stars payments in ``router``, usually the ``Dispatcher``.
+
+        Adds a sub-router with the pre-checkout and successful-payment handlers for ``XTR``, and
+        starts and stops the refund outbox with the dispatcher (polling, or a webhook app set
+        up with ``setup_application(app, dispatcher, bot=bot)``). Handlers registered on
+        ``router`` itself run first, so a bot can still handle some Stars invoices on its own.
+
+        Raises:
+            RuntimeError: This object was set up on a router already.
+        """
+        router.include_router(self._router)
+
+    async def start(self, bot: Bot, **data: Any) -> None:  # noqa: ANN401 - handler data
+        """Start sending refunds in the background with ``bot``.
+
+        The dispatcher calls this on startup; call it yourself only if the dispatcher does not
+        run startup hooks. ``data`` is passed to the outbox callbacks. Does nothing if running.
+        """
+        await self._outbox.start(bot, data)
+
+    async def stop(self) -> None:
+        """Stop the background refunds, after the attempt in flight. Does nothing if stopped."""
+        await self._outbox.stop()
+
+    async def _on_startup(self, **data: Any) -> None:  # noqa: ANN401 - handler data
+        bot = data.pop("bot", None)
+        if not isinstance(bot, Bot):
+            msg = (
+                "aiogram-stars needs the bot to send refunds: pass bot=... to "
+                "setup_application(), or call StarsPayments.start(bot) yourself"
+            )
+            raise RuntimeError(msg)
+        data.pop("router", None)
+        await self.start(bot, **data)
+
+    async def _on_shutdown(self) -> None:
+        await self.stop()
+
+    # -- invoices ------------------------------------------------------------------------------
+
+    def make_payload(self, order_id: str | int, amount: int) -> str:
+        """Return the signed payload for an invoice of ``amount`` Stars for ``order_id``.
+
+        Use it for invoices that :meth:`send_invoice` and :meth:`create_invoice_link` do not
+        cover, such as ``InputInvoiceMessageContent`` in inline mode.
+        """
+        return self._signer.sign(order_id, amount)
+
+    async def send_invoice(
+        self,
+        bot: Bot,
+        chat_id: int | str,
+        *,
+        order_id: str | int,
+        amount: int,
+        title: str,
+        description: str,
+        label: str | None = None,
+        **options: Any,  # noqa: ANN401 - passed to Bot.send_invoice
+    ) -> Message:
+        """Send an invoice for ``amount`` Stars for ``order_id`` to ``chat_id``.
+
+        Args:
+            bot: The bot that sends it.
+            chat_id: Where to send it.
+            order_id: Your order id; it comes back in ``Checkout`` and ``Payment``.
+            amount: The price in Stars.
+            title: Product name, 1-32 characters.
+            description: Product description, 1-255 characters.
+            label: The price label; ``title`` if not given.
+            **options: More ``sendInvoice`` parameters, such as ``photo_url`` or
+                ``reply_markup``.
+
+        Returns:
+            The invoice message.
+        """
+        payload = self.make_payload(order_id, amount)
+        return await bot.send_invoice(
+            chat_id=chat_id,
+            title=title,
+            description=description,
+            payload=payload,
+            currency=STARS,
+            prices=[LabeledPrice(label=label or title, amount=amount)],
+            provider_token="",
+            **options,
+        )
+
+    async def create_invoice_link(
+        self,
+        bot: Bot,
+        *,
+        order_id: str | int,
+        amount: int,
+        title: str,
+        description: str,
+        label: str | None = None,
+        subscription_period: timedelta | None = None,
+        **options: Any,  # noqa: ANN401 - passed to Bot.create_invoice_link
+    ) -> str:
+        """Create an invoice link, for example for ``WebApp.openInvoice`` in a Mini App.
+
+        Takes the arguments of :meth:`send_invoice`, except ``chat_id``, and:
+
+        Args:
+            bot: The bot that creates it.
+            order_id: Your order id.
+            amount: The price in Stars, per period for a subscription.
+            title: Product name, 1-32 characters.
+            description: Product description, 1-255 characters.
+            label: The price label; ``title`` if not given.
+            subscription_period: Makes the invoice a subscription that renews after this
+                period. Telegram accepts only :data:`SUBSCRIPTION_PERIOD` (30 days) for now.
+            **options: More ``createInvoiceLink`` parameters.
+
+        Returns:
+            The invoice link.
+        """
+        payload = self.make_payload(order_id, amount)
+        period: int | None = None
+        if subscription_period is not None:
+            seconds = subscription_period.total_seconds()
+            if seconds <= 0 or not seconds.is_integer():
+                msg = "subscription_period must be a positive whole number of seconds"
+                raise ValueError(msg)
+            period = int(seconds)
+        return await bot.create_invoice_link(
+            title=title,
+            description=description,
+            payload=payload,
+            currency=STARS,
+            prices=[LabeledPrice(label=label or title, amount=amount)],
+            provider_token="",
+            subscription_period=period,
+            **options,
+        )
+
+    # -- payments ------------------------------------------------------------------------------
+
+    async def get_payment(self, charge_id: str) -> Payment | None:
+        """Return the recorded payment with ``charge_id``, if there is one."""
+        return await self._storage.get_payment(charge_id)
+
+    async def _on_pre_checkout(self, query: PreCheckoutQuery, **data: Any) -> None:  # noqa: ANN401
+        bot: Bot = data["bot"]
+        ok, error = await self._decide(query, data)
+        await bot.answer_pre_checkout_query(
+            pre_checkout_query_id=query.id, ok=ok, error_message=error
+        )
+
+    async def _decide(
+        self, query: PreCheckoutQuery, data: dict[str, Any]
+    ) -> tuple[bool, str | None]:
+        try:
+            order_id = self._signer.verify(query.invoice_payload, query.total_amount)
+        except InvalidPayload as exc:
+            log.warning(
+                "declined pre-checkout query %s from user %s: %s", query.id, query.from_user.id, exc
+            )
+            return False, self._checkout_error
+        if self._check is None:
+            return True, None
+        checkout = Checkout(
+            order_id=order_id, amount=query.total_amount, user_id=query.from_user.id, query=query
+        )
+        try:
+            await asyncio.wait_for(self._check(checkout, data), self._checkout_timeout)
+        except RejectPayment as exc:
+            log.info("check declined order %s: %s", order_id, exc.reason)
+            return False, exc.reason
+        except asyncio.TimeoutError:
+            log.error(
+                "check for order %s took longer than %s s; declined pre-checkout query %s",
+                order_id,
+                self._checkout_timeout,
+                query.id,
+            )
+            return False, self._checkout_error
+        except Exception:
+            log.exception(
+                "check for order %s failed; declined pre-checkout query %s", order_id, query.id
+            )
+            return False, self._checkout_error
+        return True, None
+
+    async def _on_successful_payment(self, message: Message, **data: Any) -> None:  # noqa: ANN401
+        paid = message.successful_payment
+        if paid is None:  # pragma: no cover - the filter lets only payments through
+            return
+        now = self._clock()
+        try:
+            order_id, rejection = self._signer.verify(paid.invoice_payload, paid.total_amount), None
+        except InvalidPayload:
+            order_id, rejection = "", _INVALID_PAYLOAD
+        payment = Payment(
+            charge_id=paid.telegram_payment_charge_id,
+            user_id=message.from_user.id if message.from_user else message.chat.id,
+            order_id=order_id,
+            amount=paid.total_amount,
+            payload=paid.invoice_payload,
+            status=PaymentStatus.PROCESSING,
+            created_at=now,
+            updated_at=now,
+            is_recurring=bool(paid.is_recurring),
+            is_first_recurring=bool(paid.is_first_recurring),
+            subscription_expires_at=_expiry(paid.subscription_expiration_date),
+        )
+        token = secrets.token_hex(16)
+        claimed = await self._storage.claim_payment(
+            payment, token=token, now=now, until=now + self._payment_lease
+        )
+        if not claimed:
+            log.info(
+                "payment %s is recorded already; ignoring the repeated update", payment.charge_id
+            )
+            return
+        if rejection is not None:
+            log.error(
+                "payment %s from user %s: %s; refunding it",
+                payment.charge_id,
+                payment.user_id,
+                rejection,
+            )
+            await self._settle(payment, token, PaymentStatus.REJECTED, rejection, refund=True)
+            return
+        try:
+            await self._on_paid(payment, {**data, "message": message})
+        except RejectPayment as exc:
+            log.warning(
+                "payment %s for order %s rejected: %s; refund queued",
+                payment.charge_id,
+                payment.order_id,
+                exc.reason,
+            )
+            await self._settle(payment, token, PaymentStatus.REJECTED, exc.reason, refund=True)
+            return
+        except Exception as exc:
+            await self._settle(payment, token, PaymentStatus.ERROR, describe(exc))
+            log.error(  # aiogram logs the traceback of the re-raised error
+                "on_paid failed for payment %s of order %s; it is marked as an error",
+                payment.charge_id,
+                payment.order_id,
+            )
+            raise
+        await self._settle(payment, token, PaymentStatus.ACCEPTED, None)
+
+    async def _settle(
+        self,
+        payment: Payment,
+        token: str,
+        status: PaymentStatus,
+        error: str | None,
+        *,
+        refund: bool = False,
+    ) -> None:
+        now = self._clock()
+        queued = (
+            Refund(
+                charge_id=payment.charge_id,
+                user_id=payment.user_id,
+                status=RefundStatus.PENDING,
+                attempts=0,
+                next_attempt_at=now,
+                created_at=now,
+                updated_at=now,
+                reason=error,
+            )
+            if refund
+            else None
+        )
+        settled = await self._storage.settle_payment(
+            payment.charge_id, token=token, status=status, error=error, now=now, refund=queued
+        )
+        if not settled:
+            log.error(
+                "payment %s was taken over by another handler before it was settled, so on_paid "
+                "may have run twice; make payment_lease (%s) longer than on_paid takes",
+                payment.charge_id,
+                self._payment_lease,
+            )
+            return
+        if queued is not None:
+            self._outbox.wake()
+
+    # -- refunds -------------------------------------------------------------------------------
+
+    async def refund(
+        self, charge_id: str, *, user_id: int | None = None, reason: str | None = None
+    ) -> Refund:
+        """Queue a refund of the payment ``charge_id``; the outbox sends it.
+
+        The refund is stored before anything is sent, so it survives a restart. There is one
+        refund per charge: if one exists, it is returned and nothing new is queued.
+
+        Args:
+            charge_id: ``telegram_payment_charge_id`` of the payment.
+            user_id: The payer. Needed only for a payment this storage has no record of.
+            reason: Why the payment is refunded, kept on the refund.
+
+        Returns:
+            The refund stored for the charge.
+
+        Raises:
+            LookupError: The payment is not recorded and ``user_id`` is not given.
+            ValueError: ``user_id`` is not the payer of the recorded payment.
+        """
+        payment = await self._storage.get_payment(charge_id)
+        if payment is not None:
+            if user_id is not None and user_id != payment.user_id:
+                msg = f"payment {charge_id!r} was paid by user {payment.user_id}, not {user_id}"
+                raise ValueError(msg)
+            user_id = payment.user_id
+        elif user_id is None:
+            msg = f"no payment {charge_id!r} is recorded; pass user_id to refund it anyway"
+            raise LookupError(msg)
+        now = self._clock()
+        refund = await self._storage.add_refund(
+            Refund(
+                charge_id=charge_id,
+                user_id=user_id,
+                status=RefundStatus.PENDING,
+                attempts=0,
+                next_attempt_at=now,
+                created_at=now,
+                updated_at=now,
+                reason=reason,
+            )
+        )
+        self._outbox.wake()
+        return refund
+
+    async def get_refund(self, charge_id: str) -> Refund | None:
+        """Return the refund of ``charge_id``, if one was queued."""
+        return await self._storage.get_refund(charge_id)
+
+    async def send_due_refunds(self, bot: Bot) -> list[Refund]:
+        """Make one attempt at every refund that is due now, and return them after it.
+
+        The background outbox does this on its own; call it to send refunds from a job of your
+        own, or in tests.
+        """
+        return await self._outbox.send_due(bot)

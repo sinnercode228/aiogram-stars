@@ -5,9 +5,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from aiogram import Bot
 
 from aiogram_stars import MemoryStorage, Storage
 from tests.helpers import Clock, connect_sqlalchemy
+from tests.telegram import FakeSession, make_bot
 
 POSTGRES_URL = os.environ.get("STARS_TEST_POSTGRES_URL", "")
 
@@ -55,3 +57,18 @@ async def storage(backend: str, tmp_path: Path) -> AsyncIterator[Storage]:
 @pytest.fixture
 def clock() -> Clock:
     return Clock()
+
+
+@pytest.fixture
+def telegram() -> tuple[Bot, FakeSession]:
+    return make_bot()
+
+
+@pytest.fixture
+def bot(telegram: tuple[Bot, FakeSession]) -> Bot:
+    return telegram[0]
+
+
+@pytest.fixture
+def session(telegram: tuple[Bot, FakeSession]) -> FakeSession:
+    return telegram[1]

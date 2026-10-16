@@ -10,11 +10,31 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from aiogram_stars import Payment, PaymentStatus, Refund, RefundStatus
+from aiogram_stars import (
+    MemoryStorage,
+    Payment,
+    PaymentStatus,
+    Refund,
+    RefundStatus,
+    StarsPayments,
+    Storage,
+)
 from aiogram_stars.sqlalchemy import SqlAlchemyStorage, metadata
 
 T0 = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
 USER_ID = 7_000_001
+SECRET = "secret-used-only-by-the-tests-0123456789"
+
+
+async def _accept(payment: Payment) -> None:
+    return None
+
+
+def make_stars(storage: Storage | None = None, **options: Any) -> StarsPayments:
+    """StarsPayments with the test secret and an ``on_paid`` that accepts every payment."""
+    options.setdefault("secret", SECRET)
+    options.setdefault("on_paid", _accept)
+    return StarsPayments(MemoryStorage() if storage is None else storage, **options)
 
 
 class Clock:
