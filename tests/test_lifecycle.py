@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import pytest
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
 from aiogram.methods import AnswerPreCheckoutQuery, RefundStarPayment
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
@@ -209,3 +209,21 @@ def test_stars_payments_is_not_tied_to_one_router() -> None:
     stars: StarsPayments = make_stars()
     assert "StarsPayments" in repr(stars)
     assert SECRET not in repr(stars)
+
+
+async def test_setup_on_a_router_inside_the_dispatcher(bot: Bot, session: FakeSession) -> None:
+    stars = make_stars(refunds=QUIET)
+    payments = Router(name="payments")
+    stars.setup(payments)
+    dp = Dispatcher()
+    dp.include_router(payments)
+
+    await dp.emit_startup(bot=bot)
+    running_after_startup = stars.running
+    await dp.feed_update(bot, pre_checkout_update(bot, PAYLOAD, 100))
+    await dp.emit_shutdown(bot=bot)
+
+    assert running_after_startup
+    assert not stars.running
+    [answer] = session.calls(AnswerPreCheckoutQuery)
+    assert answer.ok is True
