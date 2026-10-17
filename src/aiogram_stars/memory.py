@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from ._models import Payment, PaymentStatus, Refund, RefundStatus
+from ._storage import require_limit
 from ._time import require_aware as _aware
 
 __all__ = ["MemoryStorage"]
@@ -53,6 +54,12 @@ class _Lease:
 class _Row:
     payment: Payment
     lease: _Lease
+
+    def stuck_at(self, now: datetime) -> bool:
+        status = self.payment.status
+        if status is PaymentStatus.PROCESSING:
+            return self.lease.free_at(now)
+        return status is PaymentStatus.ERROR
 
 
 @dataclass(slots=True)
@@ -118,6 +125,41 @@ class MemoryStorage:
         row = self._payments.get(charge_id)
         return None if row is None else row.payment
 
+    async def list_stuck_payments(self, *, now: datetime, limit: int) -> list[Payment]:
+        """See :meth:`aiogram_stars.Storage.list_stuck_payments`."""
+        _aware(now)
+        require_limit(limit)
+        stuck = [row.payment for row in self._payments.values() if row.stuck_at(now)]
+        stuck.sort(key=lambda p: (p.created_at, p.charge_id))
+        return stuck[:limit]
+
+    async def settle_stuck_payment(
+        self,
+        charge_id: str,
+        *,
+        status: PaymentStatus,
+        error: str | None,
+        now: datetime,
+        refund: Refund | None = None,
+    ) -> Payment | None:
+        """See :meth:`aiogram_stars.Storage.settle_stuck_payment`."""
+        _aware(now)
+        if refund is not None:
+            _aware(refund.next_attempt_at, refund.created_at, refund.updated_at)
+        row = self._payments.get(charge_id)
+        if row is None or not row.stuck_at(now):
+            return None
+        row.payment = replace(
+            row.payment,
+            status=status,
+            error=row.payment.error if error is None else error,
+            updated_at=_utc(now),
+        )
+        row.lease.release()
+        if refund is not None:
+            self._refunds.setdefault(refund.charge_id, _RefundRow(_utc_refund(refund), _Lease()))
+        return row.payment
+
     async def add_refund(self, refund: Refund) -> Refund:
         """See :meth:`aiogram_stars.Storage.add_refund`."""
         _aware(refund.next_attempt_at, refund.created_at, refund.updated_at)
@@ -173,4 +215,28 @@ class MemoryStorage:
             updated_at=_utc(now),
         )
         row.lease.release()
+        return row.refund
+
+    async def list_failed_refunds(self, *, limit: int) -> list[Refund]:
+        """See :meth:`aiogram_stars.Storage.list_failed_refunds`."""
+        require_limit(limit)
+        failed = [
+            row.refund for row in self._refunds.values() if row.refund.status is RefundStatus.FAILED
+        ]
+        failed.sort(key=lambda r: (r.created_at, r.charge_id))
+        return failed[:limit]
+
+    async def retry_refund(self, charge_id: str, *, now: datetime) -> Refund | None:
+        """See :meth:`aiogram_stars.Storage.retry_refund`."""
+        _aware(now)
+        row = self._refunds.get(charge_id)
+        if row is None or row.refund.status is not RefundStatus.FAILED:
+            return None
+        row.refund = replace(
+            row.refund,
+            status=RefundStatus.PENDING,
+            attempts=0,
+            next_attempt_at=_utc(now),
+            updated_at=_utc(now),
+        )
         return row.refund

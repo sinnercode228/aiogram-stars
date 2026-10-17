@@ -46,6 +46,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from ._models import Payment, PaymentStatus, Refund, RefundStatus
+from ._storage import require_limit
 from ._time import require_aware
 
 __all__ = ["SqlAlchemyStorage", "metadata"]
@@ -113,6 +114,18 @@ refunds = Table(
     Column("updated_at", _UTCDateTime(), nullable=False),
     Index("ix_stars_refunds_due", "status", "next_attempt_at"),
 )
+
+
+def _stuck(now: datetime) -> ColumnElement[bool]:
+    """A payment that is ``ERROR``, or ``PROCESSING`` and not held by a claim at ``now``."""
+    c = payments.c
+    return or_(
+        c.status == PaymentStatus.ERROR.value,
+        and_(
+            c.status == PaymentStatus.PROCESSING.value,
+            or_(c.leased_until.is_(None), c.leased_until <= now),
+        ),
+    )
 
 
 def _payment_row(payment: Payment) -> dict[str, Any]:
@@ -269,6 +282,52 @@ class SqlAlchemyStorage:
             row = found.one_or_none()
         return None if row is None else _payment(row)
 
+    async def list_stuck_payments(self, *, now: datetime, limit: int) -> list[Payment]:
+        """See :meth:`aiogram_stars.Storage.list_stuck_payments`."""
+        require_aware(now)
+        require_limit(limit)
+        c = payments.c
+        async with self._engine.connect() as conn:
+            found = await conn.execute(
+                select(payments).where(_stuck(now)).order_by(c.created_at, c.charge_id).limit(limit)
+            )
+            return [_payment(row) for row in found]
+
+    async def settle_stuck_payment(
+        self,
+        charge_id: str,
+        *,
+        status: PaymentStatus,
+        error: str | None,
+        now: datetime,
+        refund: Refund | None = None,
+    ) -> Payment | None:
+        """See :meth:`aiogram_stars.Storage.settle_stuck_payment`."""
+        require_aware(now)
+        if refund is not None:
+            require_aware(refund.next_attempt_at, refund.created_at, refund.updated_at)
+        c = payments.c
+        values: dict[str, Any] = {
+            "status": status.value,
+            "updated_at": now,
+            "lease_token": None,
+            "leased_until": None,
+        }
+        if error is not None:
+            values["error"] = error
+        async with self._engine.begin() as conn:
+            # The stuck check is part of the WHERE clause, so of two operators, or of an operator
+            # and a handler taking the payment over, only one changes the row.
+            settled = await conn.execute(
+                update(payments).where(c.charge_id == charge_id, _stuck(now)).values(values)
+            )
+            if settled.rowcount != 1:
+                return None
+            if refund is not None:
+                await self._insert_new(conn, refunds, _refund_row(refund))
+            found = await conn.execute(select(payments).where(c.charge_id == charge_id))
+            return _payment(found.one())
+
     async def add_refund(self, refund: Refund) -> Refund:
         """See :meth:`aiogram_stars.Storage.add_refund`."""
         require_aware(refund.next_attempt_at, refund.created_at, refund.updated_at)
@@ -346,6 +405,41 @@ class SqlAlchemyStorage:
                 )
             )
             if finished.rowcount != 1:
+                return None
+            found = await conn.execute(select(refunds).where(c.charge_id == charge_id))
+            return _refund(found.one())
+
+    async def list_failed_refunds(self, *, limit: int) -> list[Refund]:
+        """See :meth:`aiogram_stars.Storage.list_failed_refunds`."""
+        require_limit(limit)
+        c = refunds.c
+        async with self._engine.connect() as conn:
+            found = await conn.execute(
+                select(refunds)
+                .where(c.status == RefundStatus.FAILED.value)
+                .order_by(c.created_at, c.charge_id)
+                .limit(limit)
+            )
+            return [_refund(row) for row in found]
+
+    async def retry_refund(self, charge_id: str, *, now: datetime) -> Refund | None:
+        """See :meth:`aiogram_stars.Storage.retry_refund`."""
+        require_aware(now)
+        c = refunds.c
+        async with self._engine.begin() as conn:
+            queued = await conn.execute(
+                update(refunds)
+                .where(c.charge_id == charge_id, c.status == RefundStatus.FAILED.value)
+                .values(
+                    status=RefundStatus.PENDING.value,
+                    attempts=0,
+                    next_attempt_at=now,
+                    updated_at=now,
+                    lease_token=None,
+                    leased_until=None,
+                )
+            )
+            if queued.rowcount != 1:
                 return None
             found = await conn.execute(select(refunds).where(c.charge_id == charge_id))
             return _refund(found.one())
