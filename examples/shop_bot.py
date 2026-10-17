@@ -43,6 +43,7 @@ log = logging.getLogger("shop_bot")
 
 PRICE = 50  # Stars
 GIVE_BACK = "We could not complete your order, so we are returning your Stars."
+MESSAGE_LIMIT = 4096  # characters of text Telegram takes in one message
 
 
 @dataclass
@@ -176,7 +177,9 @@ def create_admin_router(stars: StarsPayments, admin_id: int) -> Router:
             "\n/accept <charge_id> if you handed the order over yourself, /reject <charge_id> to "
             "refund it, /retry <charge_id> to send a failed refund again."
         )
-        await message.answer("\n".join(lines))
+        text = "\n".join(lines)  # long errors can make it longer than one message
+        for start in range(0, len(text), MESSAGE_LIMIT):
+            await message.answer(text[start : start + MESSAGE_LIMIT])
 
     @router.message(Command("accept", "reject", "retry"))
     async def settle(message: Message, command: CommandObject, shop: Shop) -> None:

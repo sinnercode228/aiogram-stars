@@ -523,8 +523,9 @@ async def report_stuck(stars: StarsPayments, bot: Bot) -> None:
         for p in await stars.stuck_payments(limit=20)
     ]
     lines += [f"refund {r.charge_id}: {r.last_error}" for r in await stars.failed_refunds(limit=20)]
-    if lines:
-        await bot.send_message(ADMIN_CHAT_ID, "\n".join(lines))
+    text = "\n".join(lines)
+    for start in range(0, len(text), 4096):  # a message holds up to 4096 characters
+        await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096])
 ```
 
 Запускайте её своим планировщиком или один раз после старта бота. Этот код тоже прогоняет

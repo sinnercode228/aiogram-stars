@@ -16,6 +16,7 @@ from tests.helpers import SECRET, USER_ID, Clock, make_payment, make_stars
 from tests.telegram import FakeSession, message_update, payment_update, pre_checkout_update
 
 ROOT = Path(__file__).parents[1]
+TELEGRAM_MESSAGE_LIMIT = 4096  # characters of text in one message
 CODE_BLOCK = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 
 
@@ -118,4 +119,29 @@ async def test_recovery_report_tells_the_admin_what_needs_a_person(
         "payment ch-1: order 42, 50 Stars, processing\n"
         "payment ch-3: order 42, 50 Stars, KeyError: 'sku'\n"
         "refund ch-2: TelegramBadRequest: Telegram server says - Bad Request: BALANCE_TOO_LOW"
+    )
+
+
+async def test_long_recovery_report_is_split_into_messages_telegram_accepts(
+    bot: Bot, session: FakeSession, clock: Clock
+) -> None:
+    scope: dict[str, Any] = {"__name__": "readme_recovery"}
+    exec(compile(recovery_report("README.md"), "README.md", "exec"), scope)  # noqa: S102
+    storage = MemoryStorage()
+    lease = clock.now + timedelta(minutes=10)
+    for n in range(20):
+        charge_id = f"ch-{n:02}"
+        assert await storage.claim_payment(
+            make_payment(charge_id), token=charge_id, now=clock.now, until=lease
+        )
+        assert await storage.settle_payment(
+            charge_id, token=charge_id, status=PaymentStatus.ERROR, error="E" * 300, now=clock.now
+        )
+
+    await scope["report_stuck"](make_stars(storage, clock=clock), bot)
+
+    reports = [call.text for call in session.calls(SendMessage)]
+    assert max(map(len, reports)) <= TELEGRAM_MESSAGE_LIMIT
+    assert "".join(reports) == "\n".join(
+        f"payment ch-{n:02}: order order-1, 100 Stars, {'E' * 300}" for n in range(20)
     )

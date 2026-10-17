@@ -20,6 +20,7 @@ from tests.telegram import FakeSession, message_update, payment_update, pre_chec
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "shop_bot.py"
 ADMIN_ID = 1_000_001
+TELEGRAM_MESSAGE_LIMIT = 4096  # characters of text in one message
 
 
 @pytest.fixture(scope="module")
@@ -194,6 +195,31 @@ async def test_admin_settles_payments_left_behind_and_retries_a_failed_refund(
     assert texts(session)[-1] == (
         "Your Stars are back. We could not complete your order, so we are returning your Stars."
     )
+
+
+async def test_long_stuck_list_is_split_into_messages_telegram_accepts(
+    shop_bot: ModuleType, bot: Bot, session: FakeSession
+) -> None:
+    storage = MemoryStorage()
+    dp, _ = shop_bot.create_dispatcher(storage, SECRET, admin_id=ADMIN_ID)
+    now = datetime.now(timezone.utc)
+    for n in range(20):
+        charge_id = f"ch-{n:02}"
+        payment = make_payment(charge_id, created_at=now, updated_at=now)
+        assert await storage.claim_payment(
+            payment, token="t", now=now, until=now + timedelta(minutes=10)
+        )
+        assert await storage.settle_payment(
+            charge_id, token="t", status=PaymentStatus.ERROR, error="E" * 300, now=now
+        )
+
+    await dp.feed_update(bot, message_update(bot, "/stuck", user_id=ADMIN_ID))
+
+    replies = texts(session)
+    assert max(map(len, replies)) <= TELEGRAM_MESSAGE_LIMIT
+    report = "".join(replies)
+    assert all(f"ch-{n:02}: order order-1, 100 Stars, error" in report for n in range(20))
+    assert report.endswith("to send a failed refund again.")
 
 
 async def test_admin_commands_need_a_known_charge_id(
