@@ -289,7 +289,10 @@ class SqlAlchemyStorage:
         c = payments.c
         async with self._engine.connect() as conn:
             found = await conn.execute(
-                select(payments).where(_stuck(now)).order_by(c.created_at, c.charge_id).limit(limit)
+                select(payments)
+                .where(_stuck(now))
+                .order_by(c.created_at, self._by_code_point(c.charge_id))
+                .limit(limit)
             )
             return [_payment(row) for row in found]
 
@@ -417,7 +420,7 @@ class SqlAlchemyStorage:
             found = await conn.execute(
                 select(refunds)
                 .where(c.status == RefundStatus.FAILED.value)
-                .order_by(c.created_at, c.charge_id)
+                .order_by(c.created_at, self._by_code_point(c.charge_id))
                 .limit(limit)
             )
             return [_refund(row) for row in found]
@@ -454,6 +457,11 @@ class SqlAlchemyStorage:
                 .limit(_CANDIDATES)
             )
             return found.scalars().all()
+
+    def _by_code_point(self, column: Column[str]) -> ColumnElement[str]:
+        """``column`` ordered by code point, as Python orders strings, whatever the collation."""
+        # SQLite's default BINARY collation compares the UTF-8 bytes, which is code point order.
+        return column.collate("C") if self._dialect == "postgresql" else column
 
     async def _insert_new(self, conn: AsyncConnection, table: Table, row: dict[str, Any]) -> bool:
         """Insert ``row`` unless its ``charge_id`` is taken. Returns whether it was inserted."""

@@ -78,7 +78,8 @@ class Storage(Protocol):
         """Return up to ``limit`` payments that are stuck at ``now``.
 
         Returns:
-            The payments, ordered by ``created_at``, then by ``charge_id``.
+            The payments, ordered by ``created_at``, then by the code points of ``charge_id``
+            (the order of Python strings, whatever the collation of the database).
         """
         ...
 
@@ -152,7 +153,7 @@ class Storage(Protocol):
         """Return up to ``limit`` refunds that are ``FAILED``.
 
         Returns:
-            The refunds, ordered by ``created_at``, then by ``charge_id``.
+            The refunds, ordered by ``created_at``, then by the code points of ``charge_id``.
         """
         ...
 

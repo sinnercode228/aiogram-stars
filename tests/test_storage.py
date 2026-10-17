@@ -392,6 +392,20 @@ async def test_stuck_payments_stop_at_the_limit_and_tie_on_the_charge_id(storage
     assert [p.charge_id for p in stuck] == ["a", "b"]
 
 
+async def test_listings_compare_charge_ids_by_code_point(storage: Storage) -> None:
+    # "B" comes before "a" by code point, as Python compares strings. A linguistic collation,
+    # such as en-US on PostgreSQL, puts "a" first.
+    for charge_id in ("a", "B"):
+        await settled(storage, make_payment(charge_id), PaymentStatus.ERROR, "boom")
+        await failed_refund(storage, charge_id)
+
+    stuck = await storage.list_stuck_payments(now=T0, limit=1)
+    failed = await storage.list_failed_refunds(limit=1)
+
+    assert [p.charge_id for p in stuck] == ["B"]
+    assert [r.charge_id for r in failed] == ["B"]
+
+
 async def test_stuck_payment_rejected_by_hand_gets_its_refund_in_the_same_write(
     storage: Storage,
 ) -> None:
