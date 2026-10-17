@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +11,8 @@ import pytest
 from aiogram import Bot
 from aiogram.methods import AnswerPreCheckoutQuery, RefundStarPayment, SendInvoice, SendMessage
 
-from aiogram_stars import PaymentStatus, RefundStatus
-from tests.helpers import SECRET, USER_ID
+from aiogram_stars import MemoryStorage, PaymentStatus, RefundPolicy, RefundStatus
+from tests.helpers import SECRET, USER_ID, Clock, make_payment, make_stars
 from tests.telegram import FakeSession, message_update, payment_update, pre_checkout_update
 
 ROOT = Path(__file__).parents[1]
@@ -25,8 +26,20 @@ def quick_start(readme: str) -> str:
     return found.group(1)
 
 
+def recovery_report(readme: str) -> str:
+    """The Python block of ``readme`` that reports stuck payments to an admin."""
+    text = (ROOT / readme).read_text(encoding="utf-8")
+    blocks = [found.group(1) for found in CODE_BLOCK.finditer(text)]
+    [block] = [block for block in blocks if "def report_stuck" in block]
+    return block
+
+
 def test_both_readmes_have_the_same_quick_start() -> None:
     assert quick_start("README.ru.md") == quick_start("README.md")
+
+
+def test_both_readmes_have_the_same_recovery_report() -> None:
+    assert recovery_report("README.ru.md") == recovery_report("README.md")
 
 
 @pytest.fixture
@@ -70,3 +83,39 @@ async def test_quick_start_sells_refunds_and_ignores_a_repeated_update(
     assert rejected.status is PaymentStatus.REJECTED
     assert (refund.charge_id, refund.status) == ("second", RefundStatus.DONE)
     assert len(session.calls(RefundStarPayment)) == 1
+
+
+async def test_recovery_report_tells_the_admin_what_needs_a_person(
+    bot: Bot, session: FakeSession, clock: Clock
+) -> None:
+    scope: dict[str, Any] = {"__name__": "readme_recovery"}
+    exec(compile(recovery_report("README.md"), "README.md", "exec"), scope)  # noqa: S102
+    report_stuck = scope["report_stuck"]
+    storage = MemoryStorage()
+    stars = make_stars(storage, clock=clock, refunds=RefundPolicy(max_attempts=1))
+
+    await report_stuck(stars, bot)
+    assert session.calls(SendMessage) == [], "nothing needs a person, so nothing is sent"
+
+    # A process was killed inside on_paid, on_paid failed for another payment, and a refund
+    # failed for good.
+    lease = clock.now + timedelta(minutes=10)
+    for charge_id in ("ch-1", "ch-3"):
+        payment = make_payment(charge_id, order_id="42", amount=50)
+        assert await storage.claim_payment(payment, token=charge_id, now=clock.now, until=lease)
+    assert await storage.settle_payment(
+        "ch-3", token="ch-3", status=PaymentStatus.ERROR, error="KeyError: 'sku'", now=clock.now
+    )
+    await stars.refund("ch-2", user_id=USER_ID)
+    session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW")
+    await stars.send_due_refunds(bot)
+    clock.advance(minutes=10)
+    await report_stuck(stars, bot)
+
+    [report] = session.calls(SendMessage)
+    assert report.chat_id == scope["ADMIN_CHAT_ID"]
+    assert report.text == (
+        "payment ch-1: order 42, 50 Stars, processing\n"
+        "payment ch-3: order 42, 50 Stars, KeyError: 'sku'\n"
+        "refund ch-2: TelegramBadRequest: Telegram server says - Bad Request: BALANCE_TOO_LOW"
+    )
