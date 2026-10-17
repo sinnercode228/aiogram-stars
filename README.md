@@ -526,8 +526,8 @@ Run it from a scheduler of your own, or once after startup.
 [`tests/test_readme.py`](https://github.com/sinnercode228/aiogram-stars/blob/main/tests/test_readme.py)
 runs it too.
 [`examples/shop_bot.py`](https://github.com/sinnercode228/aiogram-stars/blob/main/examples/shop_bot.py)
-does the same with admin commands: `/stuck` shows both lists, and `/accept`, `/reject` and
-`/retry` take a charge id.
+does the same with admin commands for the user in `ADMIN_ID`: `/stuck` shows both lists, and
+`/accept`, `/reject` and `/retry` take a charge id.
 
 ## Subscriptions
 
@@ -576,9 +576,11 @@ subscription goes on and is charged again next month; call `cancel_subscription`
   the outcome is stored, the payment stays `processing`, and most likely nothing calls
   `on_paid` for it again; nothing calls it again for an `error` payment either. Once the lease
   has run out, `stuck_payments()` lists the payment and you settle it by hand, see
-  [Recovering stuck payments](#recovering-stuck-payments). If the database fails while the
-  payment is first recorded, there is no row at all, and the log line and `getStarTransactions`
-  are the only trace (the library does not call `getStarTransactions`).
+  [Recovering stuck payments](#recovering-stuck-payments). The library never calls
+  `stuck_payments()` itself and logs nothing about a payment whose process was killed, so run a
+  job that calls it, such as the report there. If the database fails while the payment is first
+  recorded, there is no row at all, and the log line and `getStarTransactions` are the only trace
+  (the library does not call `getStarTransactions`).
 - **Every unverified payment is refunded.** That includes invoices sent before the bot used this
   library, renewals of subscriptions started before it, and payloads signed with a secret that
   is no longer in `previous_secrets`. To keep handling an old format, register its handlers on
