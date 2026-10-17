@@ -5,18 +5,21 @@ from __future__ import annotations
 import importlib.util
 import sys
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import AnswerPreCheckoutQuery, RefundStarPayment, SendInvoice, SendMessage
 
-from aiogram_stars import MemoryStorage, RefundStatus
-from tests.helpers import SECRET, USER_ID
+from aiogram_stars import MemoryStorage, PaymentStatus, RefundStatus
+from tests.helpers import SECRET, USER_ID, make_payment
 from tests.telegram import FakeSession, message_update, payment_update, pre_checkout_update
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "shop_bot.py"
+ADMIN_ID = 1_000_001
 
 
 @pytest.fixture(scope="module")
@@ -96,3 +99,123 @@ async def test_refund_needs_a_payment_of_the_sender(
         "Questions about a payment? Reply here and the shop will answer.",
     ]
     assert await stars.get_refund("someone-elses") is None
+
+
+async def test_admin_accepts_a_payment_whose_receipt_could_not_be_sent(
+    shop_bot: ModuleType, bot: Bot, session: FakeSession
+) -> None:
+    dp, stars = shop_bot.create_dispatcher(MemoryStorage(), SECRET, admin_id=ADMIN_ID)
+    await dp.feed_update(bot, message_update(bot, "/buy"))
+    [invoice] = session.calls(SendInvoice)
+    session.fail(SendMessage, "Forbidden: bot was blocked by the user", status=403)
+    with pytest.raises(TelegramForbiddenError):
+        await dp.feed_update(bot, payment_update(bot, invoice.payload, 50, charge_id="ch-1"))
+    sent = len(texts(session))
+
+    await dp.feed_update(bot, message_update(bot, "/stuck"))
+    assert len(texts(session)) == sent, "only the admin can use the admin commands"
+
+    await dp.feed_update(bot, message_update(bot, "/stuck", user_id=ADMIN_ID))
+    assert texts(session)[-1] == (
+        "ch-1: order 1, 50 Stars, error (TelegramForbiddenError: Telegram server says - "
+        "Forbidden: bot was blocked by the user)\n\n"
+        "/accept <charge_id> if you handed the order over yourself, /reject <charge_id> to "
+        "refund it, /retry <charge_id> to send a failed refund again."
+    )
+
+    await dp.feed_update(bot, message_update(bot, "/accept ch-1", user_id=ADMIN_ID))
+    assert texts(session)[-1] == "Payment ch-1 is accepted."
+    payment = await stars.get_payment("ch-1")
+    assert payment is not None
+    assert payment.status is PaymentStatus.ACCEPTED
+    assert dp["shop"].get("1").paid
+
+    await dp.feed_update(bot, message_update(bot, "/accept ch-1", user_id=ADMIN_ID))
+    assert texts(session)[-1] == "payment 'ch-1' is accepted already"
+    await dp.feed_update(bot, message_update(bot, "/stuck", user_id=ADMIN_ID))
+    assert texts(session)[-1] == "Nothing needs you right now."
+
+
+async def test_admin_settles_payments_left_behind_and_retries_a_failed_refund(
+    shop_bot: ModuleType, bot: Bot, session: FakeSession
+) -> None:
+    storage = MemoryStorage()
+    dp, stars = shop_bot.create_dispatcher(storage, SECRET, admin_id=ADMIN_ID)
+    await dp.feed_update(bot, message_update(bot, "/buy"))
+    await dp.feed_update(bot, message_update(bot, "/buy"))
+    first, second = session.calls(SendInvoice)
+    # The process that recorded these payments was killed inside on_paid an hour ago.
+    started = datetime.now(timezone.utc) - timedelta(hours=1)
+    for charge_id, invoice in (("ch-1", first), ("ch-2", second)):
+        payment = make_payment(
+            charge_id,
+            order_id=invoice.payload.rpartition(".")[0],
+            amount=50,
+            payload=invoice.payload,
+            created_at=started,
+        )
+        assert await storage.claim_payment(
+            payment, token="dead", now=started, until=started + timedelta(minutes=10)
+        )
+
+    await dp.feed_update(bot, message_update(bot, "/accept ch-1", user_id=ADMIN_ID))
+    assert texts(session)[-1] == "Payment ch-1 is accepted."
+    assert dp["shop"].get("1").charge_id == "ch-1"
+
+    await dp.feed_update(bot, message_update(bot, "/reject ch-2", user_id=ADMIN_ID))
+    assert texts(session)[-1] == "Payment ch-2 is rejected; the refund is on its way."
+    assert not dp["shop"].get("2").paid
+    session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW")
+    [attempt] = await stars.send_due_refunds(bot)
+    assert attempt.status is RefundStatus.PENDING
+
+    # Let the refund fail for good, as its last attempt would.
+    later = datetime.now(timezone.utc) + timedelta(hours=1)
+    assert await storage.claim_refund(token="w", now=later, until=later + timedelta(minutes=5))
+    failed = await storage.finish_refund_attempt(
+        "ch-2",
+        token="w",
+        status=RefundStatus.FAILED,
+        error=attempt.last_error,
+        next_attempt_at=later,
+        now=later,
+    )
+    assert failed is not None
+    await dp.feed_update(bot, message_update(bot, "/stuck", user_id=ADMIN_ID))
+    assert texts(session)[-1].startswith(
+        "refund ch-2: failed after 2 attempts (TelegramBadRequest: Telegram server says - "
+        "Bad Request: BALANCE_TOO_LOW)\n\n"
+    )
+
+    await dp.feed_update(bot, message_update(bot, "/retry ch-2", user_id=ADMIN_ID))
+    assert texts(session)[-1] == "The refund of ch-2 is queued again."
+    [refund] = await stars.send_due_refunds(bot)
+    assert refund.status is RefundStatus.DONE
+    assert texts(session)[-1] == (
+        "Your Stars are back. We could not complete your order, so we are returning your Stars."
+    )
+
+
+async def test_admin_commands_need_a_known_charge_id(
+    shop_bot: ModuleType, bot: Bot, session: FakeSession
+) -> None:
+    dp, _ = shop_bot.create_dispatcher(MemoryStorage(), SECRET, admin_id=ADMIN_ID)
+
+    for text in ("/accept", "/reject nope", "/retry nope"):
+        await dp.feed_update(bot, message_update(bot, text, user_id=ADMIN_ID))
+
+    assert texts(session) == [
+        "Send /accept <charge_id>.",
+        "no payment 'nope' is recorded",
+        "no refund of charge 'nope' is queued",
+    ]
+
+
+async def test_without_an_admin_there_are_no_admin_commands(
+    shop_bot: ModuleType, bot: Bot, session: FakeSession
+) -> None:
+    dp, _ = shop_bot.create_dispatcher(MemoryStorage(), SECRET)
+
+    await dp.feed_update(bot, message_update(bot, "/stuck", user_id=ADMIN_ID))
+
+    assert texts(session) == []

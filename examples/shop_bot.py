@@ -4,11 +4,19 @@
 /refund   /refund <charge_id> gives the Stars of a payment back
 /paysupport  tells the buyer where to ask about a payment (Telegram asks bots that sell to have it)
 
+The shop owner (ADMIN_ID) also has:
+
+/stuck    lists the payments and refunds that need a person
+/accept   /accept <charge_id> settles a stuck payment whose order was handed over by hand
+/reject   /reject <charge_id> settles a stuck payment by refunding it
+/retry    /retry <charge_id> queues a failed refund again
+
 Run it:
 
     pip install "aiogram-stars[sqlite]"
     export BOT_TOKEN=123456:ABC...          # from @BotFather
     export STARS_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+    export ADMIN_ID=123456789               # your Telegram user id; optional
     python examples/shop_bot.py
 
 Payments and refunds are kept in ``shop.db`` (or ``DATABASE_URL``), so a refund that was queued
@@ -23,7 +31,7 @@ import logging
 import os
 from dataclasses import dataclass
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -34,6 +42,7 @@ from aiogram_stars.sqlalchemy import SqlAlchemyStorage
 log = logging.getLogger("shop_bot")
 
 PRICE = 50  # Stars
+GIVE_BACK = "We could not complete your order, so we are returning your Stars."
 
 
 @dataclass
@@ -103,7 +112,7 @@ async def on_refunded(refund: Refund, bot: Bot, shop: Shop) -> None:
 
 
 async def on_refund_failed(refund: Refund) -> None:
-    # A person has to look at this one: tell the admins in a real bot.
+    # A person has to look at this one: /stuck lists it, and /retry sends it again.
     log.error("refund of %s failed: %s", refund.charge_id, refund.last_error)
 
 
@@ -144,7 +153,61 @@ def create_router(stars: StarsPayments) -> Router:
     return router
 
 
-def create_dispatcher(storage: Storage, secret: str) -> tuple[Dispatcher, StarsPayments]:
+def create_admin_router(stars: StarsPayments, admin_id: int) -> Router:
+    """Commands for the shop owner: the payments and refunds that need a person."""
+    router = Router(name="admin")
+    router.message.filter(F.from_user.id == admin_id)
+
+    @router.message(Command("stuck"))
+    async def stuck(message: Message) -> None:
+        lines = [
+            f"{p.charge_id}: order {p.order_id}, {p.amount} Stars, {p.status}"
+            + (f" ({p.error})" if p.error else "")
+            for p in await stars.stuck_payments(limit=20)
+        ]
+        lines += [
+            f"refund {r.charge_id}: failed after {r.attempts} attempts ({r.last_error})"
+            for r in await stars.failed_refunds(limit=20)
+        ]
+        if not lines:
+            await message.answer("Nothing needs you right now.")
+            return
+        lines.append(
+            "\n/accept <charge_id> if you handed the order over yourself, /reject <charge_id> to "
+            "refund it, /retry <charge_id> to send a failed refund again."
+        )
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("accept", "reject", "retry"))
+    async def settle(message: Message, command: CommandObject, shop: Shop) -> None:
+        charge_id = (command.args or "").strip()
+        if not charge_id:
+            await message.answer(f"Send /{command.command} <charge_id>.")
+            return
+        try:
+            if command.command == "accept":
+                payment = await stars.accept_payment(charge_id)
+                order = shop.get(payment.order_id)
+                if order is not None and not order.paid:
+                    order.charge_id = charge_id
+                answer = f"Payment {charge_id} is accepted."
+            elif command.command == "reject":
+                await stars.reject_payment(charge_id, reason=GIVE_BACK)
+                answer = f"Payment {charge_id} is rejected; the refund is on its way."
+            else:
+                await stars.retry_refund(charge_id)
+                answer = f"The refund of {charge_id} is queued again."
+        except (LookupError, ValueError) as exc:
+            # Not recorded, settled already, or still being handled.
+            answer = str(exc)
+        await message.answer(answer)
+
+    return router
+
+
+def create_dispatcher(
+    storage: Storage, secret: str, admin_id: int | None = None
+) -> tuple[Dispatcher, StarsPayments]:
     stars = StarsPayments(
         storage,
         secret=secret,
@@ -155,6 +218,8 @@ def create_dispatcher(storage: Storage, secret: str) -> tuple[Dispatcher, StarsP
     )
     dp = Dispatcher(shop=Shop())
     dp.include_router(create_router(stars))
+    if admin_id is not None:
+        dp.include_router(create_admin_router(stars, admin_id))
     stars.setup(dp)
     return dp, stars
 
@@ -164,7 +229,10 @@ async def main() -> None:
     engine = create_async_engine(os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///shop.db"))
     storage = SqlAlchemyStorage(engine)
     await storage.create_tables()
-    dp, _ = create_dispatcher(storage, os.environ["STARS_SECRET"])
+    admin_id = os.environ.get("ADMIN_ID")
+    dp, _ = create_dispatcher(
+        storage, os.environ["STARS_SECRET"], None if admin_id is None else int(admin_id)
+    )
     bot = Bot(os.environ["BOT_TOKEN"])
     try:
         await dp.start_polling(bot)
