@@ -282,7 +282,7 @@ protocol: `claim_payment`, `settle_payment`, `get_payment`, `list_stuck_payments
 `list_failed_refunds` and `retry_refund`; `list_stuck_payments`, `settle_stuck_payment`,
 `list_failed_refunds` and `retry_refund` are new in 0.2.0. It must keep one payment and one
 refund per charge id, make each method atomic across processes, and raise `ValueError` for a
-naive datetime.
+naive datetime or a `limit` below 1.
 [`tests/test_storage.py`](https://github.com/sinnercode228/aiogram-stars/blob/main/tests/test_storage.py)
 runs one contract against the memory, SQLite and PostgreSQL storages; point its `storage`
 fixture at yours.
@@ -422,11 +422,13 @@ Send its ERROR records wherever you get alerts.
 
 ## Refund outbox
 
-A refund is queued in two ways: `RejectPayment` raised in `on_paid`, or a call to
-`stars.refund(charge_id, reason=...)`. The call stores the refund and returns it; nothing is sent
-from the calling task. A second call for the same charge returns the refund already stored. A
-charge the storage does not know needs `user_id=`, otherwise the call raises `LookupError`, and
-a `user_id` that is not the payer's raises `ValueError`.
+A refund is queued when `on_paid` raises `RejectPayment` or the payload of a paid invoice does
+not verify, when a stuck payment is rejected by hand with `stars.reject_payment` (see
+[Recovering stuck payments](#recovering-stuck-payments)), or by a call to
+`stars.refund(charge_id, reason=...)`. That call stores the refund and returns it; nothing is
+sent from the calling task. A second call for the same charge returns the refund already stored.
+A charge the storage does not know needs `user_id=`, otherwise the call raises `LookupError`,
+and a `user_id` that is not the payer's raises `ValueError`.
 
 The background task (`aiogram-stars-refunds`) starts with the dispatcher. It looks for due
 refunds right after a refund is queued in the same process and otherwise every `poll_interval`.
@@ -478,7 +480,7 @@ happened to the order, then settle the payment:
 | Call | Payment | Refund |
 | --- | --- | --- |
 | `await stars.accept_payment(charge_id)` | `accepted`; `error` keeps what `on_paid` raised | none |
-| `await stars.reject_payment(charge_id, reason=...)` | `rejected`, `error` is `reason` | queued in the same transaction, with `reason`, as `RejectPayment` raised in `on_paid` does |
+| `await stars.reject_payment(charge_id, reason=...)` | `rejected`, `error` is `reason` | queued in the same transaction, with `reason`, as `RejectPayment` raised in `on_paid` does; a refund queued earlier for the charge is kept |
 
 Both return the payment as stored. They change it only while it is stuck (on SQL, with one
 conditional `UPDATE`), so a payment whose lease has not run out, and whose `on_paid` may still
@@ -497,7 +499,8 @@ payment becomes stuck. If you settle the payment then, your outcome stays, the o
 error in `last_error`. Once the cause is fixed, `await stars.retry_refund(charge_id)` queues one
 again: it becomes `pending` and due now, `attempts` goes back to 0, so it gets `max_attempts`
 attempts again, and the outbox sends it. A refund that is not `failed` raises `ValueError`, a
-charge with no refund `LookupError`.
+charge with no refund `LookupError`. If the refund fails again, the outbox calls
+`on_refund_failed` again; if it goes through, `on_refunded`.
 
 A job that sends both lists to an admin chat:
 
@@ -555,9 +558,9 @@ period (from `subscription_expiration_date`).
 renew. `is_canceled=False` lets the user renew a subscription the bot canceled. `user_id=` is
 needed only for a charge the storage does not know.
 
-Renewals keep the payload that was signed when the subscription started, so keep a retired
-secret in `previous_secrets` for as long as subscriptions signed with it are active. A renewal
-that is rejected, by `on_paid` or because its payload no longer verifies, is refunded, but the
+Renewals keep the payload that was signed when the subscription started, so keep a retired secret
+in `previous_secrets` for as long as subscriptions signed with it are active. A renewal that is
+rejected, by `on_paid`, by hand or because its payload no longer verifies, is refunded, but the
 subscription goes on and is charged again next month; call `cancel_subscription` as well.
 
 ## Limits
@@ -591,7 +594,8 @@ subscription goes on and is charged again next month; call `cancel_subscription`
   ```
 
 - **Callbacks are not retried.** `on_refunded` and `on_refund_failed` run once, and so does
-  `on_paid` (see the table above).
+  `on_paid` (see the table above). A refund queued again with `retry_refund` starts its attempts
+  over, so if it fails again, `on_refund_failed` runs once more.
 - **The pre-checkout timeout covers `check` only.** The time the update took to reach the bot
   and the `answerPreCheckoutQuery` request itself come out of the same 10 seconds.
 - **The tests do not talk to Telegram.** They run against a fake Bot API session whose replies go
@@ -692,8 +696,9 @@ has an entry in [CHANGELOG.md](https://github.com/sinnercode228/aiogram-stars/bl
 
 1. Set the version in `pyproject.toml` and `__version__` in `src/aiogram_stars/__init__.py`;
    `tests/test_packaging.py` fails if the two differ.
-2. In `CHANGELOG.md`, replace `Unreleased` in the version's heading with the release date.
-3. Commit, then push a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+2. In `CHANGELOG.md`, replace `Unreleased` in the version's heading with the release date, and
+   point the version's link at its tag.
+3. Commit, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
 [`release.yml`](https://github.com/sinnercode228/aiogram-stars/blob/main/.github/workflows/release.yml)
 checks that the tag matches the version, runs the tests (without PostgreSQL; the CI workflow

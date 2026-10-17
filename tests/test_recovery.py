@@ -356,6 +356,33 @@ async def test_failed_refund_is_listed_and_sent_again_after_retry_refund(
     assert len(session.calls(RefundStarPayment)) == 5
 
 
+async def test_retried_refund_that_fails_again_calls_on_refund_failed_again(
+    bot: Bot, session: FakeSession, storage: Storage, clock: Clock
+) -> None:
+    failed: list[Refund] = []
+
+    async def on_refund_failed(refund: Refund) -> None:
+        failed.append(refund)
+
+    stars = make_stars(
+        storage,
+        clock=clock,
+        refunds=RefundPolicy(max_attempts=1),
+        on_refund_failed=on_refund_failed,
+    )
+    await stars.refund("charge-1", user_id=USER_ID)
+    session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW", times=2)
+
+    await stars.send_due_refunds(bot)
+    await stars.retry_refund("charge-1")
+    await stars.send_due_refunds(bot)
+
+    assert [(r.charge_id, r.status, r.attempts) for r in failed] == [
+        ("charge-1", RefundStatus.FAILED, 1),
+        ("charge-1", RefundStatus.FAILED, 1),
+    ]
+
+
 async def test_retry_refund_refuses_a_refund_that_did_not_fail(
     bot: Bot, storage: Storage, clock: Clock
 ) -> None:
