@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -21,6 +22,7 @@ from aiogram_stars import (
     Refund,
     RefundPolicy,
     RefundStatus,
+    RejectPayment,
     StarsPayments,
     Storage,
 )
@@ -377,6 +379,55 @@ async def test_on_paid_that_finishes_after_a_settle_by_hand_is_reported(
         "payment charge-1 was taken over by another handler or settled by hand while on_paid "
         "ran, so its outcome (accepted) was not stored"
     ) in caplog.text
+
+
+class Overrun(Exception):
+    """What on_paid raises in the tests below."""
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize(
+    "raised",
+    [RejectPayment("Out of stock"), Overrun("the warehouse API is down")],
+    ids=["reject", "error"],
+)
+async def test_outcome_of_on_paid_is_logged_as_stored_only_when_it_was(
+    bot: Bot,
+    storage: Storage,
+    clock: Clock,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    late: bool,
+    raised: Exception,
+) -> None:
+    if isinstance(raised, RejectPayment):
+        outcome, stored_line = PaymentStatus.REJECTED, "Out of stock; refund queued"
+    else:
+        outcome, stored_line = PaymentStatus.ERROR, "it is marked as an error"
+    stars: StarsPayments
+
+    async def on_paid(payment: Payment) -> None:
+        if late:
+            # on_paid outlives its lease, and an admin accepts the payment meanwhile.
+            clock.advance(minutes=11)
+            await stars.accept_payment(payment.charge_id)
+        raise raised
+
+    stars = make_stars(storage, on_paid=on_paid, clock=clock, payment_lease=LEASE)
+    reaches_aiogram: contextlib.AbstractContextManager[object] = (
+        pytest.raises(Overrun) if outcome is PaymentStatus.ERROR else contextlib.nullcontext()
+    )
+
+    with caplog.at_level(logging.INFO, logger="aiogram_stars"), reaches_aiogram:
+        await dispatcher(stars).feed_update(bot, payment_update(bot, PAYLOAD, 100))
+
+    payment = await stars.get_payment("charge-1")
+    assert payment is not None
+    assert payment.status is (PaymentStatus.ACCEPTED if late else outcome)
+    refunded = await stars.get_refund("charge-1") is not None
+    assert refunded is (outcome is PaymentStatus.REJECTED and not late)
+    assert (stored_line in caplog.text) is not late
+    assert (f"so its outcome ({outcome}) was not stored" in caplog.text) is late
 
 
 class FinishedMeanwhile(MemoryStorage):

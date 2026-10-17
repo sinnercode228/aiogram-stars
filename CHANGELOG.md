@@ -37,7 +37,9 @@ All notable changes to this project are documented here. The format follows
   `SqlAlchemyStorage` implement them; in `SqlAlchemyStorage` they are conditional `UPDATE`s like
   the claims, and the tables are the same as in 0.1.0.
 - The error logged when `on_paid` finishes after its payment changed hands now names the outcome
-  that was not stored and also covers a payment that was settled by hand in the meantime.
+  that was not stored and also covers a payment that was settled by hand in the meantime. In
+  that case the lines that said the refund was queued (WARNING) or the payment was marked as an
+  error (ERROR) are no longer logged, since neither was stored.
 
 ## [0.1.0] - 2026-10-17
 

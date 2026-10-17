@@ -520,21 +520,21 @@ class StarsPayments:
         try:
             await self._on_paid(payment, {**data, "message": message})
         except RejectPayment as exc:
-            log.warning(
-                "payment %s for order %s rejected: %s; refund queued",
-                payment.charge_id,
-                payment.order_id,
-                exc.reason,
-            )
-            await self._settle(payment, token, PaymentStatus.REJECTED, exc.reason, refund=True)
+            if await self._settle(payment, token, PaymentStatus.REJECTED, exc.reason, refund=True):
+                log.warning(
+                    "payment %s for order %s rejected: %s; refund queued",
+                    payment.charge_id,
+                    payment.order_id,
+                    exc.reason,
+                )
             return
         except Exception as exc:
-            await self._settle(payment, token, PaymentStatus.ERROR, describe(exc))
-            log.error(  # aiogram logs the traceback of the re-raised error
-                "on_paid failed for payment %s of order %s; it is marked as an error",
-                payment.charge_id,
-                payment.order_id,
-            )
+            if await self._settle(payment, token, PaymentStatus.ERROR, describe(exc)):
+                log.error(  # aiogram logs the traceback of the re-raised error
+                    "on_paid failed for payment %s of order %s; it is marked as an error",
+                    payment.charge_id,
+                    payment.order_id,
+                )
             raise
         await self._settle(payment, token, PaymentStatus.ACCEPTED, None)
 
@@ -546,7 +546,8 @@ class StarsPayments:
         error: str | None,
         *,
         refund: bool = False,
-    ) -> None:
+    ) -> bool:
+        """Store the outcome of ``on_paid``; return whether it was stored."""
         now = self._clock()
         queued = _new_refund(payment.charge_id, payment.user_id, error, now) if refund else None
         settled = await self._storage.settle_payment(
@@ -561,9 +562,10 @@ class StarsPayments:
                 status,
                 self._payment_lease,
             )
-            return
+            return False
         if queued is not None:
             self._outbox.wake()
+        return True
 
     # -- refunds -------------------------------------------------------------------------------
 
