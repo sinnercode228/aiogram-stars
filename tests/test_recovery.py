@@ -61,14 +61,6 @@ async def errored(storage: Storage, clock: Clock, charge_id: str = "charge-1") -
     )
 
 
-async def eventually(condition: Callable[[], bool], timeout: float = 2) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() > deadline:
-            pytest.fail("the condition did not become true in time")
-        await asyncio.sleep(0.01)
-
-
 async def test_stuck_payments_lists_failed_and_abandoned_payments(
     bot: Bot, storage: Storage, clock: Clock
 ) -> None:
@@ -172,10 +164,29 @@ async def test_reject_payment_keeps_a_refund_queued_before(storage: Storage, clo
     assert await stars.get_refund("charge-1") == before
 
 
+class SweepWatch(MemoryStorage):
+    """Tells when a sweep of the outbox has found no more due refunds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.idle = asyncio.Event()
+
+    async def claim_refund(self, *, token: str, now: datetime, until: datetime) -> Refund | None:
+        claimed = await super().claim_refund(token=token, now=now, until=until)
+        if claimed is None:
+            self.idle.set()
+        return claimed
+
+    async def next_idle(self) -> None:
+        """Wait for the end of the sweep that is running or about to run."""
+        await asyncio.wait_for(self.idle.wait(), timeout=2)
+        self.idle.clear()
+
+
 async def test_settling_by_hand_and_retrying_wake_the_running_outbox(
     bot: Bot, session: FakeSession, clock: Clock
 ) -> None:
-    storage = MemoryStorage()
+    storage = SweepWatch()
     refunded: list[Refund] = []
     failed: list[Refund] = []
 
@@ -197,12 +208,14 @@ async def test_settling_by_hand_and_retrying_wake_the_running_outbox(
     session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW")
     await stars.start(bot)
     try:
-        await asyncio.sleep(0.05)  # the first sweep found nothing; the next is an hour away
+        await storage.next_idle()  # the first sweep found nothing; the next is an hour away
         await stars.reject_payment("charge-1", reason="Not delivered")
-        await eventually(lambda: len(failed) == 1)
+        await storage.next_idle()
+        assert len(failed) == 1
 
         await stars.retry_refund("charge-1")
-        await eventually(lambda: len(refunded) == 1)
+        await storage.next_idle()
+        assert len(refunded) == 1
     finally:
         await stars.stop()
 
