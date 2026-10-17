@@ -518,7 +518,7 @@ ERROR: то, на что должен посмотреть человек, на�
 from aiogram import Bot
 from aiogram_stars import StarsPayments
 
-ADMIN_CHAT_ID = 123456789  # where the report goes
+ADMIN_CHAT_ID = 123456789  # куда отправлять отчёт
 
 
 async def report_stuck(stars: StarsPayments, bot: Bot) -> None:
@@ -528,7 +528,7 @@ async def report_stuck(stars: StarsPayments, bot: Bot) -> None:
     ]
     lines += [f"refund {r.charge_id}: {r.last_error}" for r in await stars.failed_refunds(limit=20)]
     text = "\n".join(lines)
-    for start in range(0, len(text), 4096):  # a message holds up to 4096 characters
+    for start in range(0, len(text), 4096):  # в одно сообщение помещается до 4096 символов
         await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096])
 ```
 

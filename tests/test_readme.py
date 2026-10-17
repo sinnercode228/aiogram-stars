@@ -39,8 +39,20 @@ def test_both_readmes_have_the_same_quick_start() -> None:
     assert quick_start("README.ru.md") == quick_start("README.md")
 
 
+def without_comments(code: str) -> str:
+    return re.sub(r"\s*#.*$", "", code, flags=re.MULTILINE)
+
+
 def test_both_readmes_have_the_same_recovery_report() -> None:
-    assert recovery_report("README.ru.md") == recovery_report("README.md")
+    # Each README comments the code in its own language; the code is the same.
+    russian, english = recovery_report("README.ru.md"), recovery_report("README.md")
+    assert without_comments(russian) == without_comments(english)
+
+
+def run_recovery_report(readme: str) -> dict[str, Any]:
+    scope: dict[str, Any] = {"__name__": "readme_recovery"}
+    exec(compile(recovery_report(readme), readme, "exec"), scope)  # noqa: S102 - our own README
+    return scope
 
 
 @pytest.fixture
@@ -86,11 +98,11 @@ async def test_quick_start_sells_refunds_and_ignores_a_repeated_update(
     assert len(session.calls(RefundStarPayment)) == 1
 
 
+@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
 async def test_recovery_report_tells_the_admin_what_needs_a_person(
-    bot: Bot, session: FakeSession, clock: Clock
+    bot: Bot, session: FakeSession, clock: Clock, readme: str
 ) -> None:
-    scope: dict[str, Any] = {"__name__": "readme_recovery"}
-    exec(compile(recovery_report("README.md"), "README.md", "exec"), scope)  # noqa: S102
+    scope = run_recovery_report(readme)
     report_stuck = scope["report_stuck"]
     storage = MemoryStorage()
     stars = make_stars(storage, clock=clock, refunds=RefundPolicy(max_attempts=1))
@@ -122,11 +134,11 @@ async def test_recovery_report_tells_the_admin_what_needs_a_person(
     )
 
 
+@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
 async def test_long_recovery_report_is_split_into_messages_telegram_accepts(
-    bot: Bot, session: FakeSession, clock: Clock
+    bot: Bot, session: FakeSession, clock: Clock, readme: str
 ) -> None:
-    scope: dict[str, Any] = {"__name__": "readme_recovery"}
-    exec(compile(recovery_report("README.md"), "README.md", "exec"), scope)  # noqa: S102
+    scope = run_recovery_report(readme)
     storage = MemoryStorage()
     lease = clock.now + timedelta(minutes=10)
     for n in range(20):
