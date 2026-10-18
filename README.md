@@ -578,9 +578,10 @@ subscription goes on and is charged again next month; call `cancel_subscription`
   has run out, `stuck_payments()` lists the payment and you settle it by hand, see
   [Recovering stuck payments](#recovering-stuck-payments). The library never calls
   `stuck_payments()` itself and logs nothing about a payment whose process was killed, so run a
-  job that calls it, such as the report there. If the database fails while the payment is first
-  recorded, there is no row at all, and the log line and `getStarTransactions` are the only trace
-  (the library does not call `getStarTransactions`).
+  job that calls it, such as the report there. On SQL each call reads the whole
+  `stars_payments` table, since no index covers `status`. If the database fails while the
+  payment is first recorded, there is no row at all, and the log line and `getStarTransactions`
+  are the only trace (the library does not call `getStarTransactions`).
 - **Every unverified payment is refunded.** That includes invoices sent before the bot used this
   library, renewals of subscriptions started before it, and payloads signed with a secret that
   is no longer in `previous_secrets`. To keep handling an old format, register its handlers on
