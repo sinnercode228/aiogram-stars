@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-18
 
 ### Added
 
@@ -93,5 +93,5 @@ All notable changes to this project are documented here. The format follows
 - `examples/shop_bot.py`, a runnable bot with `/buy`, `/refund <charge_id>` and `/paysupport`.
 - README in English and Russian; its quick start runs in the test suite.
 
-[0.2.0]: https://github.com/sinnercode228/aiogram-stars/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/sinnercode228/aiogram-stars/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sinnercode228/aiogram-stars/releases/tag/v0.1.0
