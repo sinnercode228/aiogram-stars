@@ -12,7 +12,7 @@ patch release of that minor version.
 | Version | Gets fixes |
 | --- | --- |
 | 0.2.x | yes |
-| 0.1.x and older | no, upgrade to 0.2 |
+| 0.1.x | no, upgrade to 0.2 |
 
 ## Reporting a vulnerability
 
