@@ -164,6 +164,25 @@ async def test_reject_payment_keeps_a_refund_queued_before(storage: Storage, clo
     assert await stars.get_refund("charge-1") == before
 
 
+async def test_reject_payment_logs_a_refund_queued_before_as_kept(
+    storage: Storage, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    await errored(storage, clock, "fresh")
+    await errored(storage, clock, "refunded")
+    stars = make_stars(storage, clock=clock)
+    await stars.refund("refunded", reason="Refunded from the admin panel")
+
+    with caplog.at_level(logging.INFO, logger="aiogram_stars"):
+        await stars.reject_payment("fresh", reason="Not delivered")
+        await stars.reject_payment("refunded", reason="Not delivered")
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "payment fresh of order order-1 was rejected by hand; refund queued",
+        "payment refunded of order order-1 was rejected by hand; its refund was queued before "
+        "and is kept",
+    ]
+
+
 class SweepWatch(MemoryStorage):
     """Tells when a sweep of the outbox has found no more due refunds."""
 

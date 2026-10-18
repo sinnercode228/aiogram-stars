@@ -681,6 +681,8 @@ class StarsPayments:
             raise LookupError(msg)
         now = self._clock()
         refund = None if reason is None else _new_refund(charge_id, payment.user_id, reason, now)
+        # A refund is never deleted, so one found now is the one the settle below keeps.
+        earlier = None if refund is None else await self._storage.get_refund(charge_id)
         settled = await self._storage.settle_stuck_payment(
             charge_id, status=status, error=reason, now=now, refund=refund
         )
@@ -688,12 +690,14 @@ class StarsPayments:
             # Read again to say why; a payment is never deleted, so the first read is a fallback.
             current = await self._storage.get_payment(charge_id) or payment
             raise ValueError(_not_stuck(charge_id, current))
+        if refund is None:
+            what = ""
+        elif earlier is None:
+            what = "; refund queued"
+        else:
+            what = "; its refund was queued before and is kept"
         log.info(
-            "payment %s of order %s was %s by hand%s",
-            charge_id,
-            settled.order_id,
-            status,
-            "" if refund is None else "; refund queued",
+            "payment %s of order %s was %s by hand%s", charge_id, settled.order_id, status, what
         )
         if refund is not None:
             self._outbox.wake()
