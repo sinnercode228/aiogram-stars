@@ -472,10 +472,11 @@ that nothing settles any more, and a refund that ran out of attempts.
 
 A payment is stuck when it is `error`, because `on_paid` raised, or still `processing` after its
 `payment_lease` ran out, because the process was killed inside `on_paid` or the database failed
-while the outcome was stored. `on_paid` does not run for it again unless Telegram sends the
-update again, which it seldom does (see [Limits](#limits)). `await stars.stuck_payments()`
-lists such payments, oldest first, at most `limit` of them (100 by default). Find out what
-happened to the order, then settle the payment:
+while the outcome was stored. `on_paid` does not run again for an `error` payment, even if the
+update comes again, and for a `processing` one only if Telegram sends the update again, which it
+seldom does (see [Limits](#limits)). `await stars.stuck_payments()` lists such payments, oldest
+first, at most `limit` of them (100 by default). Find out what happened to the order, then
+settle the payment:
 
 | Call | Payment | Refund |
 | --- | --- | --- |

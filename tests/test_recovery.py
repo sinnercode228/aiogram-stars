@@ -94,6 +94,27 @@ async def test_stuck_payments_lists_failed_and_abandoned_payments(
         await stars.stuck_payments(limit=0)
 
 
+async def test_on_paid_does_not_run_again_for_an_error_payment_when_the_update_comes_again(
+    bot: Bot, storage: Storage, clock: Clock
+) -> None:
+    paid: list[str] = []
+
+    async def on_paid(payment: Payment) -> None:
+        paid.append(payment.charge_id)
+        raise RuntimeError("the warehouse API is down")
+
+    stars = make_stars(storage, on_paid=on_paid, clock=clock)
+    dp = dispatcher(stars)
+    with pytest.raises(RuntimeError, match="warehouse"):
+        await dp.feed_update(bot, payment_update(bot, PAYLOAD, 100))
+    clock.advance(days=1)
+
+    await dp.feed_update(bot, payment_update(bot, PAYLOAD, 100))
+
+    assert paid == ["charge-1"], "unlike a processing payment, an error one is not taken over"
+    assert [p.charge_id for p in await stars.stuck_payments()] == ["charge-1"]
+
+
 async def test_accept_payment_settles_a_stuck_payment_without_a_refund(
     bot: Bot, storage: Storage, clock: Clock
 ) -> None:
