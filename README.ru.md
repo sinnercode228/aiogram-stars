@@ -756,6 +756,10 @@ pytest --cov
 `Storage` ломает все хранилища, написанные вне этого репозитория, поэтому сначала откройте
 issue. Баги и вопросы — в [GitHub issues](https://github.com/sinnercode228/aiogram-stars/issues).
 
+Остальное (самые старые поддерживаемые версии, проверка примеров из README, CHANGELOG, стиль
+коммитов) описано в [CONTRIBUTING.md](https://github.com/sinnercode228/aiogram-stars/blob/main/CONTRIBUTING.md),
+по-английски, с коротким разделом на русском в конце.
+
 ## Лицензия
 
 MIT, текст в [LICENSE](https://github.com/sinnercode228/aiogram-stars/blob/main/LICENSE).

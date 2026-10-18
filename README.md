@@ -748,6 +748,10 @@ and logging goes through `logging.getLogger(__name__)`. A new method on `Storage
 storage written outside this repository, so open an issue before proposing one. Bugs and
 questions go to [GitHub issues](https://github.com/sinnercode228/aiogram-stars/issues).
 
+[CONTRIBUTING.md](https://github.com/sinnercode228/aiogram-stars/blob/main/CONTRIBUTING.md) has the rest:
+the lowest supported versions, how the README samples are tested, the changelog and the commit
+style.
+
 ## License
 
 MIT, see [LICENSE](https://github.com/sinnercode228/aiogram-stars/blob/main/LICENSE).
