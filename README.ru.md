@@ -529,7 +529,8 @@ async def report_stuck(stars: StarsPayments, bot: Bot) -> None:
     lines += [f"refund {r.charge_id}: {r.last_error}" for r in await stars.failed_refunds(limit=20)]
     text = "\n".join(lines)
     for start in range(0, len(text), 4096):  # в одно сообщение помещается до 4096 символов
-        await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096])
+        # parse_mode=None: ошибки — простой текст, даже если у бота задан режим разметки
+        await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096], parse_mode=None)
 ```
 
 Запускайте её своим планировщиком или один раз после старта бота. Этот код тоже прогоняет

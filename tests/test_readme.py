@@ -9,11 +9,13 @@ from typing import Any
 
 import pytest
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.methods import AnswerPreCheckoutQuery, RefundStarPayment, SendInvoice, SendMessage
 
 from aiogram_stars import MemoryStorage, PaymentStatus, RefundPolicy, RefundStatus
 from tests.helpers import SECRET, USER_ID, Clock, make_payment, make_stars
-from tests.telegram import FakeSession, message_update, payment_update, pre_checkout_update
+from tests.telegram import TOKEN, FakeSession, message_update, payment_update, pre_checkout_update
 
 ROOT = Path(__file__).parents[1]
 TELEGRAM_MESSAGE_LIMIT = 4096  # characters of text in one message
@@ -156,4 +158,32 @@ async def test_long_recovery_report_is_split_into_messages_telegram_accepts(
     assert max(map(len, reports)) <= TELEGRAM_MESSAGE_LIMIT
     assert "".join(reports) == "\n".join(
         f"payment ch-{n:02}: order order-1, 100 Stars, {'E' * 300}" for n in range(20)
+    )
+
+
+@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
+@pytest.mark.parametrize("parse_mode", [ParseMode.HTML, ParseMode.MARKDOWN_V2])
+async def test_recovery_report_is_plain_text_whatever_the_bot_parses_by_default(
+    clock: Clock, readme: str, parse_mode: ParseMode
+) -> None:
+    # Many bots set a default parse mode. The errors in the report are not markup, and Telegram
+    # refuses a message whose text does not parse ("can't parse entities").
+    scope = run_recovery_report(readme)
+    session = FakeSession()
+    bot = Bot(TOKEN, session=session, default=DefaultBotProperties(parse_mode=parse_mode))
+    storage = MemoryStorage()
+    error = "TypeError: '<' not supported between instances of 'str' and 'int'"
+    assert await storage.claim_payment(
+        make_payment(), token="t", now=clock.now, until=clock.now + timedelta(minutes=10)
+    )
+    assert await storage.settle_payment(
+        "charge-1", token="t", status=PaymentStatus.ERROR, error=error, now=clock.now
+    )
+
+    await scope["report_stuck"](make_stars(storage, clock=clock), bot)
+
+    [report] = session.calls(SendMessage)
+    assert report.text == f"payment charge-1: order order-1, 100 Stars, {error}"
+    assert session.prepare_value(report.parse_mode, bot=bot, files={}) is None, (
+        "the report is sent without a parse mode"
     )

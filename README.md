@@ -519,7 +519,8 @@ async def report_stuck(stars: StarsPayments, bot: Bot) -> None:
     lines += [f"refund {r.charge_id}: {r.last_error}" for r in await stars.failed_refunds(limit=20)]
     text = "\n".join(lines)
     for start in range(0, len(text), 4096):  # a message holds up to 4096 characters
-        await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096])
+        # parse_mode=None: errors are plain text, whatever the bot's default parse mode
+        await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096], parse_mode=None)
 ```
 
 Run it from a scheduler of your own, or once after startup.
