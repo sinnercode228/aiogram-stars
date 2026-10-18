@@ -13,6 +13,9 @@ keeps refunds in your database until Telegram confirms them.
 I extracted it from the payment code of [Zernolist](https://github.com/sinnercode228/tg-shop-miniapp),
 a demo coffee shop that runs as a Telegram Mini App, and made it work for any aiogram bot.
 
+Four of the bugs fixed before 0.1.0, with their reproductions and the tests that caught them, are
+written up in [The Stars were charged and on_paid never ran](https://dev.to/sinnercode228/the-stars-were-charged-and-onpaid-never-ran-where-telegram-stars-payments-get-lost-in-aiogram-5m2).
+
 ## What goes wrong without it
 
 **`successful_payment` can arrive twice.** Telegram sends a webhook update again when the bot
