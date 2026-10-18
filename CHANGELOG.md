@@ -41,6 +41,12 @@ All notable changes to this project are documented here. The format follows
   that case the lines that said the refund was queued (WARNING) or the payment was marked as an
   error (ERROR) are no longer logged, since neither was stored.
 
+### Fixed
+
+- The README said that with polling an update handled just before a restart is fetched again.
+  That holds only with `handle_as_tasks=False`; with aiogram's default the next `getUpdates`
+  goes out at once and confirms it. Both READMEs now say so.
+
 ## [0.1.0] - 2026-10-17
 
 ### Added

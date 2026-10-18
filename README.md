@@ -16,10 +16,10 @@ a demo coffee shop that runs as a Telegram Mini App, and made it work for any ai
 ## What goes wrong without it
 
 **`successful_payment` can arrive twice.** Telegram sends a webhook update again when the bot
-did not answer it in time. With polling, an update handled just before a restart is fetched
-again, because its offset is confirmed only by the next `getUpdates`. A handler that marks the
-order paid and ships it ships it twice. A check in process memory does not help when two bot
-processes share the traffic.
+did not answer it in time. With polling and `handle_as_tasks=False`, an update whose handler was
+cut off by a restart is fetched again, because aiogram confirms its offset only with the next
+`getUpdates`. A handler that marks the order paid and ships it ships it twice. A check in
+process memory does not help when two bot processes share the traffic.
 
 **A refund call fails and nothing retries it.** `refundStarPayment` is one HTTP request made
 from a handler. A timeout, a 502 from Telegram or flood control (429 with `retry_after`) raises,
