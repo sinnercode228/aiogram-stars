@@ -1,0 +1,109 @@
+name: Bug report
+description: aiogram-stars does something other than the README says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem, such as a payment handled twice or a payload that verifies without
+        the secret, goes through [SECURITY.md](https://github.com/sinnercode228/aiogram-stars/blob/main/SECURITY.md),
+        not a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: aiogram-stars version
+      description: '`python -c "import aiogram_stars; print(aiogram_stars.__version__)"`'
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: aiogram
+    attributes:
+      label: aiogram version
+      description: '`python -c "import aiogram; print(aiogram.__version__)"`'
+      placeholder: "3.15.0"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage
+      options:
+        - MemoryStorage
+        - SqlAlchemyStorage on SQLite
+        - SqlAlchemyStorage on PostgreSQL
+        - My own Storage implementation
+    validations:
+      required: true
+  - type: input
+    id: database
+    attributes:
+      label: SQLAlchemy, driver and database versions
+      description: For SqlAlchemyStorage.
+      placeholder: "SQLAlchemy 2.0.36, asyncpg 0.30.0, PostgreSQL 16"
+  - type: dropdown
+    id: updates
+    attributes:
+      label: How the bot gets updates
+      options:
+        - Polling, handle_as_tasks=True
+        - Polling, handle_as_tasks=False
+        - Webhook, handle_in_background=True
+        - Webhook, handle_in_background=False
+        - Fed by hand (dp.feed_update, tests)
+  - type: input
+    id: processes
+    attributes:
+      label: Processes sharing the storage
+      description: How many bot processes or outbox workers use the same database.
+      placeholder: "1"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        For a payment or a refund, include its status and error as `get_payment` or
+        `get_refund` returns them, or the row in `stars_payments` or `stars_refunds`.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: If the README says otherwise, link the passage.
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Minimal code
+      description: >-
+        The smallest bot or test that shows it. A test against the fake Bot API in
+        `tests/telegram.py` shows it without Telegram.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and traceback
+      description: >-
+        The `aiogram_stars` loggers at DEBUG, and the traceback if there is one. Remove the bot
+        token, the payload secret and buyers' data.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: The code and logs above contain no bot token, payload secret or personal data.
+          required: true

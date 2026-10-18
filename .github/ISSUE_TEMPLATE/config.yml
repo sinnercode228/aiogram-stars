@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README
+    url: https://github.com/sinnercode228/aiogram-stars#readme
+    about: Setup, guarantees, configuration, recovering stuck payments and limits.
+  - name: README in Russian
+    url: https://github.com/sinnercode228/aiogram-stars/blob/main/README.ru.md
+    about: The same documentation in Russian.
+  - name: Report a vulnerability
+    url: https://github.com/sinnercode228/aiogram-stars/blob/main/SECURITY.md
+    about: Report security problems privately, as SECURITY.md describes, not in a public issue.
