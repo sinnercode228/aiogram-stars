@@ -652,7 +652,8 @@ class StarsPayments:
         """Mark a stuck payment rejected and queue its refund, as ``RejectPayment`` does.
 
         The payment and the refund are stored in one storage transaction, and the outbox sends
-        the refund. If a refund for the charge was queued before, it is kept.
+        the refund. If a refund for the charge was queued before, it is kept as it is: a
+        ``FAILED`` one stays failed until :meth:`retry_refund`.
 
         Args:
             charge_id: ``telegram_payment_charge_id`` of the payment.

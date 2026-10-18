@@ -185,6 +185,25 @@ async def test_reject_payment_keeps_a_refund_queued_before(storage: Storage, clo
     assert await stars.get_refund("charge-1") == before
 
 
+async def test_reject_payment_leaves_a_failed_refund_to_retry_refund(
+    bot: Bot, session: FakeSession, storage: Storage, clock: Clock
+) -> None:
+    await errored(storage, clock)
+    stars = make_stars(storage, clock=clock, refunds=RefundPolicy(max_attempts=1))
+    await stars.refund("charge-1", reason="Refunded from the admin panel")
+    session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW")
+    [failed] = await stars.send_due_refunds(bot)
+    assert failed.status is RefundStatus.FAILED
+
+    await stars.reject_payment("charge-1", reason="Not delivered")
+
+    assert await stars.get_refund("charge-1") == failed
+    assert await stars.send_due_refunds(bot) == [], "the failed refund is not sent again by itself"
+    await stars.retry_refund("charge-1")
+    [sent] = await stars.send_due_refunds(bot)
+    assert sent.status is RefundStatus.DONE
+
+
 async def test_reject_payment_logs_a_refund_queued_before_as_kept(
     storage: Storage, clock: Clock, caplog: pytest.LogCaptureFixture
 ) -> None:
