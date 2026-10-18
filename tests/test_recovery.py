@@ -457,6 +457,50 @@ async def test_retry_refund_refuses_a_refund_that_did_not_fail(
         await stars.retry_refund("charge-1")
 
 
+class FailedAgainMeanwhile(MemoryStorage):
+    """Another admin queues the refund again just before this one, and it fails again at once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.other_admin = True
+
+    async def retry_refund(self, charge_id: str, *, now: datetime) -> Refund | None:
+        if not self.other_admin:
+            return await super().retry_refund(charge_id, now=now)
+        self.other_admin = False
+        assert await super().retry_refund(charge_id, now=now) is not None
+        ours = await super().retry_refund(charge_id, now=now)  # pending now, so not queued
+        claimed = await self.claim_refund(token="w", now=now, until=now + LEASE)
+        assert claimed is not None
+        await self.finish_refund_attempt(
+            charge_id,
+            token="w",
+            status=RefundStatus.FAILED,
+            error="TelegramBadRequest: Telegram server says - Bad Request: BALANCE_TOO_LOW",
+            next_attempt_at=now,
+            now=now,
+        )
+        return ours
+
+
+async def test_refund_that_fails_again_while_it_is_retried_asks_to_try_again(
+    bot: Bot, session: FakeSession, clock: Clock
+) -> None:
+    storage = FailedAgainMeanwhile()
+    stars = make_stars(storage, clock=clock, refunds=RefundPolicy(max_attempts=1))
+    await stars.refund("charge-1", user_id=USER_ID)
+    session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW")
+    await stars.send_due_refunds(bot)
+
+    with pytest.raises(
+        ValueError, match="the refund of charge 'charge-1' changed while it was being queued again"
+    ):
+        await stars.retry_refund("charge-1")
+
+    again = await stars.retry_refund("charge-1")
+    assert again.status is RefundStatus.PENDING
+
+
 async def test_on_paid_that_finishes_after_a_settle_by_hand_is_reported(
     bot: Bot, storage: Storage, clock: Clock, caplog: pytest.LogCaptureFixture
 ) -> None:

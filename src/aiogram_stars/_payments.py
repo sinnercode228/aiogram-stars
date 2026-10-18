@@ -725,7 +725,8 @@ class StarsPayments:
 
         Raises:
             LookupError: No refund of ``charge_id`` is queued.
-            ValueError: The refund is not ``FAILED``.
+            ValueError: The refund is not ``FAILED``, or it was not when this call tried to queue
+                it again.
         """
         refund = await self._storage.retry_refund(charge_id, now=self._clock())
         if refund is None:
@@ -733,7 +734,15 @@ class StarsPayments:
             if current is None:
                 msg = f"no refund of charge {charge_id!r} is queued"
                 raise LookupError(msg)
-            msg = f"the refund of charge {charge_id!r} is {current.status}, not failed"
+            if current.status is RefundStatus.FAILED:
+                # It was not failed when this call tried: someone else queued it again, and it
+                # failed again since.
+                msg = (
+                    f"the refund of charge {charge_id!r} changed while it was being queued "
+                    "again; try again"
+                )
+            else:
+                msg = f"the refund of charge {charge_id!r} is {current.status}, not failed"
             raise ValueError(msg)
         log.info("refund of charge %s was queued again by hand", charge_id)
         self._outbox.wake()
