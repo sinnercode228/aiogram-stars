@@ -36,7 +36,15 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from aiogram_stars import Checkout, Payment, Refund, RejectPayment, StarsPayments, Storage
+from aiogram_stars import (
+    Checkout,
+    Payment,
+    Refund,
+    RefundStatus,
+    RejectPayment,
+    StarsPayments,
+    Storage,
+)
 from aiogram_stars.sqlalchemy import SqlAlchemyStorage
 
 log = logging.getLogger("shop_bot")
@@ -154,6 +162,16 @@ def create_router(stars: StarsPayments) -> Router:
     return router
 
 
+def after_reject(refund: Refund | None) -> str:
+    """What became of the refund of a payment the admin rejected."""
+    # reject_payment keeps a refund queued before, by the buyer's /refund for example.
+    if refund is None or refund.status is RefundStatus.PENDING:
+        return "; the refund is on its way."
+    if refund.status is RefundStatus.DONE:
+        return "; its Stars were refunded already."
+    return f", but its refund failed: /retry {refund.charge_id} sends it again."
+
+
 def create_admin_router(stars: StarsPayments, admin_id: int) -> Router:
     """Commands for the shop owner: the payments and refunds that need a person."""
     router = Router(name="admin")
@@ -196,7 +214,8 @@ def create_admin_router(stars: StarsPayments, admin_id: int) -> Router:
                 answer = f"Payment {charge_id} is accepted."
             elif command.command == "reject":
                 await stars.reject_payment(charge_id, reason=GIVE_BACK)
-                answer = f"Payment {charge_id} is rejected; the refund is on its way."
+                refund = await stars.get_refund(charge_id)
+                answer = f"Payment {charge_id} is rejected{after_reject(refund)}"
             else:
                 await stars.retry_refund(charge_id)
                 answer = f"The refund of {charge_id} is queued again."
