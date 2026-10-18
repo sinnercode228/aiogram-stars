@@ -27,7 +27,15 @@ from aiogram_stars import (
     Storage,
 )
 from tests.conftest import database_url
-from tests.helpers import SECRET, USER_ID, Clock, connect_sqlalchemy, make_payment, make_stars
+from tests.helpers import (
+    SECRET,
+    USER_ID,
+    Clock,
+    SweepWatch,
+    connect_sqlalchemy,
+    make_payment,
+    make_stars,
+)
 from tests.telegram import FakeSession, payment_update
 
 PAYLOAD = PayloadSigner(SECRET).sign("order-1", 100)
@@ -194,25 +202,6 @@ async def test_reject_payment_logs_a_refund_queued_before_as_kept(
         "payment refunded of order order-1 was rejected by hand; its refund was queued before "
         "and is kept",
     ]
-
-
-class SweepWatch(MemoryStorage):
-    """Tells when a sweep of the outbox has found no more due refunds."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.idle = asyncio.Event()
-
-    async def claim_refund(self, *, token: str, now: datetime, until: datetime) -> Refund | None:
-        claimed = await super().claim_refund(token=token, now=now, until=until)
-        if claimed is None:
-            self.idle.set()
-        return claimed
-
-    async def next_idle(self) -> None:
-        """Wait for the end of the sweep that is running or about to run."""
-        await asyncio.wait_for(self.idle.wait(), timeout=2)
-        self.idle.clear()
 
 
 async def test_settling_by_hand_and_retrying_wake_the_running_outbox(
