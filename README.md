@@ -4,6 +4,7 @@ English · [Русский](https://github.com/sinnercode228/aiogram-stars/blob/
 
 [![CI](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml/badge.svg)](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
+[![Python versions](https://img.shields.io/pypi/pyversions/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
 
 Telegram Stars payments for aiogram 3. You write `check`, which decides whether to take a
 payment, and `on_paid`, which hands over the goods. aiogram-stars answers the pre-checkout query

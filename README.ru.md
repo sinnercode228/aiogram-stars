@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml/badge.svg)](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
+[![Python versions](https://img.shields.io/pypi/pyversions/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
 
 Оплата в Telegram Stars для ботов на aiogram 3. От вас две async-функции: `check` решает,
 принимать ли платёж, `on_paid` выдаёт товар. Библиотека отвечает на pre-checkout раньше, чем
