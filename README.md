@@ -479,7 +479,7 @@ happened to the order, then settle the payment:
 
 | Call | Payment | Refund |
 | --- | --- | --- |
-| `await stars.accept_payment(charge_id)` | `accepted`; `error` keeps what `on_paid` raised | none |
+| `await stars.accept_payment(charge_id)` | `accepted`; `error` keeps what `on_paid` raised | none is queued; a refund queued earlier for the charge stays as it is |
 | `await stars.reject_payment(charge_id, reason=...)` | `rejected`, `error` is `reason` | queued in the same transaction, with `reason`, as `RejectPayment` raised in `on_paid` does; a refund queued earlier for the charge is kept |
 
 Both return the payment as stored. They change it only while it is stuck (on SQL, with one

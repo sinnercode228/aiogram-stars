@@ -488,7 +488,7 @@ ERROR: то, на что должен посмотреть человек, на�
 
 | Вызов | Платёж | Возврат |
 | --- | --- | --- |
-| `await stars.accept_payment(charge_id)` | `accepted`; в `error` остаётся то, что бросил `on_paid` | нет |
+| `await stars.accept_payment(charge_id)` | `accepted`; в `error` остаётся то, что бросил `on_paid` | не ставится; если по платежу уже был возврат, он остаётся как есть |
 | `await stars.reject_payment(charge_id, reason=...)` | `rejected`, в `error` лежит `reason` | в очереди, записан той же транзакцией, с `reason`, как при `RejectPayment` из `on_paid`; если по платежу уже был возврат, остаётся он |
 
 Оба метода возвращают платёж в том виде, в каком он записан. Меняют они его, только пока он

@@ -123,6 +123,19 @@ async def test_accept_payment_settles_a_stuck_payment_without_a_refund(
     assert paid == [], "a late copy of the update does not run on_paid for a settled payment"
 
 
+async def test_accept_payment_leaves_a_refund_queued_before_as_it_is(
+    storage: Storage, clock: Clock
+) -> None:
+    await errored(storage, clock)
+    stars = make_stars(storage, clock=clock)
+    before = await stars.refund("charge-1", reason="Refunded from the admin panel")
+
+    accepted = await stars.accept_payment("charge-1")
+
+    assert accepted.status is PaymentStatus.ACCEPTED
+    assert await stars.get_refund("charge-1") == before
+
+
 async def test_reject_payment_queues_the_refund_that_on_paid_would_have_queued(
     bot: Bot, session: FakeSession, storage: Storage, clock: Clock
 ) -> None:

@@ -634,9 +634,9 @@ class StarsPayments:
     async def accept_payment(self, charge_id: str) -> Payment:
         """Mark a stuck payment accepted, for an order that was handed over by other means.
 
-        Nothing is refunded. The error ``on_paid`` raised, if any, stays on the payment. The
-        process that held the payment can no longer settle it, and ``on_paid`` does not run for
-        it again.
+        No refund is queued, and a refund queued for the charge before stays as it is. The
+        error ``on_paid`` raised, if any, stays on the payment. The process that held the payment
+        can no longer settle it, and ``on_paid`` does not run for it again.
 
         Returns:
             The payment as stored after the change.
