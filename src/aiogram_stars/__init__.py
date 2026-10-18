@@ -13,7 +13,7 @@ from ._policy import RefundPolicy
 from ._storage import Storage
 from .memory import MemoryStorage
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "SUBSCRIPTION_PERIOD",

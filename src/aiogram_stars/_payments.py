@@ -77,6 +77,29 @@ def _expiry(timestamp: int | None) -> datetime | None:
     return None if timestamp is None else datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
+def _new_refund(charge_id: str, user_id: int, reason: str | None, now: datetime) -> Refund:
+    """A refund to queue: pending, due at once, with no attempts yet."""
+    return Refund(
+        charge_id=charge_id,
+        user_id=user_id,
+        status=RefundStatus.PENDING,
+        attempts=0,
+        next_attempt_at=now,
+        created_at=now,
+        updated_at=now,
+        reason=reason,
+    )
+
+
+def _not_stuck(charge_id: str, payment: Payment) -> str:
+    """Why a payment that is recorded could not be settled by hand."""
+    if payment.status is PaymentStatus.PROCESSING:
+        return f"payment {charge_id!r} is still being handled: its lease has not run out"
+    if payment.status is PaymentStatus.ERROR:
+        return f"payment {charge_id!r} changed while it was being settled; try again"
+    return f"payment {charge_id!r} is {payment.status} already"
+
+
 class StarsPayments:
     """Telegram Stars payments for an aiogram bot.
 
@@ -108,7 +131,8 @@ class StarsPayments:
         checkout_error: What the buyer reads when a payload does not verify, ``check`` is too
             slow, or ``check`` fails with an error other than :class:`RejectPayment`.
         payment_lease: How long a payment being handled is held by the process handling it. If
-            that process dies, a redelivered update runs ``on_paid`` again after this time. It is
+            that process dies, the payment is listed by :meth:`stuck_payments` after this time,
+            and a redelivered update, which Telegram seldom sends, runs ``on_paid`` again. It is
             also the longest :meth:`stop` waits for the payments being handled.
         refunds: Retry settings of the refund outbox.
         clock: Returns the current time as an aware datetime. Tests pass their own.
@@ -496,21 +520,21 @@ class StarsPayments:
         try:
             await self._on_paid(payment, {**data, "message": message})
         except RejectPayment as exc:
-            log.warning(
-                "payment %s for order %s rejected: %s; refund queued",
-                payment.charge_id,
-                payment.order_id,
-                exc.reason,
-            )
-            await self._settle(payment, token, PaymentStatus.REJECTED, exc.reason, refund=True)
+            if await self._settle(payment, token, PaymentStatus.REJECTED, exc.reason, refund=True):
+                log.warning(
+                    "payment %s for order %s rejected: %s; refund queued",
+                    payment.charge_id,
+                    payment.order_id,
+                    exc.reason,
+                )
             return
         except Exception as exc:
-            await self._settle(payment, token, PaymentStatus.ERROR, describe(exc))
-            log.error(  # aiogram logs the traceback of the re-raised error
-                "on_paid failed for payment %s of order %s; it is marked as an error",
-                payment.charge_id,
-                payment.order_id,
-            )
+            if await self._settle(payment, token, PaymentStatus.ERROR, describe(exc)):
+                log.error(  # aiogram logs the traceback of the re-raised error
+                    "on_paid failed for payment %s of order %s; it is marked as an error",
+                    payment.charge_id,
+                    payment.order_id,
+                )
             raise
         await self._settle(payment, token, PaymentStatus.ACCEPTED, None)
 
@@ -522,35 +546,26 @@ class StarsPayments:
         error: str | None,
         *,
         refund: bool = False,
-    ) -> None:
+    ) -> bool:
+        """Store the outcome of ``on_paid``; return whether it was stored."""
         now = self._clock()
-        queued = (
-            Refund(
-                charge_id=payment.charge_id,
-                user_id=payment.user_id,
-                status=RefundStatus.PENDING,
-                attempts=0,
-                next_attempt_at=now,
-                created_at=now,
-                updated_at=now,
-                reason=error,
-            )
-            if refund
-            else None
-        )
+        queued = _new_refund(payment.charge_id, payment.user_id, error, now) if refund else None
         settled = await self._storage.settle_payment(
             payment.charge_id, token=token, status=status, error=error, now=now, refund=queued
         )
         if not settled:
             log.error(
-                "payment %s was taken over by another handler before it was settled, so on_paid "
-                "may have run twice; make payment_lease (%s) longer than on_paid takes",
+                "payment %s was taken over by another handler or settled by hand while on_paid "
+                "ran, so its outcome (%s) was not stored and on_paid may have run twice; make "
+                "payment_lease (%s) longer than on_paid takes",
                 payment.charge_id,
+                status,
                 self._payment_lease,
             )
-            return
+            return False
         if queued is not None:
             self._outbox.wake()
+        return True
 
     # -- refunds -------------------------------------------------------------------------------
 
@@ -583,18 +598,8 @@ class StarsPayments:
         elif user_id is None:
             msg = f"no payment {charge_id!r} is recorded; pass user_id to refund it anyway"
             raise LookupError(msg)
-        now = self._clock()
         refund = await self._storage.add_refund(
-            Refund(
-                charge_id=charge_id,
-                user_id=user_id,
-                status=RefundStatus.PENDING,
-                attempts=0,
-                next_attempt_at=now,
-                created_at=now,
-                updated_at=now,
-                reason=reason,
-            )
+            _new_refund(charge_id, user_id, reason, self._clock())
         )
         self._outbox.wake()
         return refund
@@ -610,6 +615,138 @@ class StarsPayments:
         own, or in tests.
         """
         return await self._outbox.send_due(bot)
+
+    # -- recovery by hand ----------------------------------------------------------------------
+
+    async def stuck_payments(self, *, limit: int = 100) -> list[Payment]:
+        """Return the payments that only a person can finish, oldest first.
+
+        These are ``ERROR`` payments, whose ``on_paid`` raised, and ``PROCESSING`` payments whose
+        lease has run out: the process handling them stopped inside ``on_paid`` or could not
+        store the outcome, and Telegram seldom sends the update again. Settle each one with
+        :meth:`accept_payment` or :meth:`reject_payment`.
+
+        Args:
+            limit: The most payments to return, at least 1.
+        """
+        return await self._storage.list_stuck_payments(now=self._clock(), limit=limit)
+
+    async def accept_payment(self, charge_id: str) -> Payment:
+        """Mark a stuck payment accepted, for an order that was handed over by other means.
+
+        No refund is queued, and a refund queued for the charge before stays as it is. The
+        error ``on_paid`` raised, if any, stays on the payment. The process that held the payment
+        can no longer settle it, and ``on_paid`` does not run for it again.
+
+        Returns:
+            The payment as stored after the change.
+
+        Raises:
+            LookupError: No payment ``charge_id`` is recorded.
+            ValueError: The payment is not stuck: it is settled already, or it is ``PROCESSING``
+                and its lease has not run out, so ``on_paid`` may still be running.
+        """
+        return await self._settle_by_hand(charge_id, PaymentStatus.ACCEPTED, None)
+
+    async def reject_payment(self, charge_id: str, *, reason: str) -> Payment:
+        """Mark a stuck payment rejected and queue its refund, as ``RejectPayment`` does.
+
+        The payment and the refund are stored in one storage transaction, and the outbox sends
+        the refund. If a refund for the charge was queued before, it is kept as it is: a
+        ``FAILED`` one stays failed until :meth:`retry_refund`.
+
+        Args:
+            charge_id: ``telegram_payment_charge_id`` of the payment.
+            reason: Why the payment is turned down, in words the buyer can read. It becomes the
+                payment's ``error`` and the refund's ``reason``.
+
+        Returns:
+            The payment as stored after the change.
+
+        Raises:
+            LookupError: No payment ``charge_id`` is recorded.
+            ValueError: ``reason`` is blank, or the payment is not stuck (see
+                :meth:`accept_payment`).
+        """
+        if not reason.strip():
+            msg = "reason must not be blank"
+            raise ValueError(msg)
+        return await self._settle_by_hand(charge_id, PaymentStatus.REJECTED, reason)
+
+    async def _settle_by_hand(
+        self, charge_id: str, status: PaymentStatus, reason: str | None
+    ) -> Payment:
+        payment = await self._storage.get_payment(charge_id)
+        if payment is None:
+            msg = f"no payment {charge_id!r} is recorded"
+            raise LookupError(msg)
+        now = self._clock()
+        refund = None if reason is None else _new_refund(charge_id, payment.user_id, reason, now)
+        # A refund is never deleted, so one found now is the one the settle below keeps.
+        earlier = None if refund is None else await self._storage.get_refund(charge_id)
+        settled = await self._storage.settle_stuck_payment(
+            charge_id, status=status, error=reason, now=now, refund=refund
+        )
+        if settled is None:
+            # Read again to say why; a payment is never deleted, so the first read is a fallback.
+            current = await self._storage.get_payment(charge_id) or payment
+            raise ValueError(_not_stuck(charge_id, current))
+        if refund is None:
+            what = ""
+        elif earlier is None:
+            what = "; refund queued"
+        else:
+            what = "; its refund was queued before and is kept"
+        log.info(
+            "payment %s of order %s was %s by hand%s", charge_id, settled.order_id, status, what
+        )
+        if refund is not None:
+            self._outbox.wake()
+        return settled
+
+    async def failed_refunds(self, *, limit: int = 100) -> list[Refund]:
+        """Return the refunds that ran out of attempts, oldest first.
+
+        Queue one again with :meth:`retry_refund` once the cause in ``last_error`` is fixed.
+
+        Args:
+            limit: The most refunds to return, at least 1.
+        """
+        return await self._storage.list_failed_refunds(limit=limit)
+
+    async def retry_refund(self, charge_id: str) -> Refund:
+        """Queue a failed refund again, with all ``max_attempts`` attempts ahead of it.
+
+        The refund becomes pending and due now, and the outbox sends it. ``last_error`` keeps
+        the last error until the next attempt.
+
+        Returns:
+            The refund as stored after the change.
+
+        Raises:
+            LookupError: No refund of ``charge_id`` is queued.
+            ValueError: The refund is not ``FAILED``, or it was not when this call tried to queue
+                it again.
+        """
+        refund = await self._storage.retry_refund(charge_id, now=self._clock())
+        if refund is None:
+            current = await self._storage.get_refund(charge_id)
+            if current is None:
+                msg = f"no refund of charge {charge_id!r} is queued"
+                raise LookupError(msg)
+            if current.status is RefundStatus.FAILED:
+                # It was not failed when this call tried: someone else queued it again, and it
+                # failed again since.
+                msg = (
+                    f"the refund of charge {charge_id!r} changed while it was being queued "
+                    "again; try again"
+                )
+            else:
+                msg = f"the refund of charge {charge_id!r} is {current.status}, not failed"
+            raise ValueError(msg)
+        log.info("refund of charge %s was queued again by hand", charge_id)
+        self._outbox.wake()
+        return refund
 
     # -- subscriptions -------------------------------------------------------------------------
 

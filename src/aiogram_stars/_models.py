@@ -13,14 +13,20 @@ class PaymentStatus(str, Enum):
     """Where a successful payment is in its handling."""
 
     PROCESSING = "processing"
-    """Recorded; ``on_paid`` is running, or the process running it stopped before it finished."""
+    """Recorded; ``on_paid`` is running, or the process running it stopped before it finished.
+    Once ``payment_lease`` has run out, :meth:`~aiogram_stars.StarsPayments.stuck_payments`
+    lists it."""
     ACCEPTED = "accepted"
-    """``on_paid`` returned normally."""
+    """``on_paid`` returned normally, or a person accepted the payment with
+    :meth:`~aiogram_stars.StarsPayments.accept_payment`."""
     REJECTED = "rejected"
-    """``on_paid`` raised :class:`~aiogram_stars.RejectPayment`, or the payload did not verify.
-    A refund was queued in the same storage transaction."""
+    """``on_paid`` raised :class:`~aiogram_stars.RejectPayment`, the payload did not verify, or a
+    person rejected the payment with :meth:`~aiogram_stars.StarsPayments.reject_payment`. A
+    refund was queued in the same storage transaction, unless the charge had one already."""
     ERROR = "error"
-    """``on_paid`` raised another exception. Nothing is refunded; a person has to look at it."""
+    """``on_paid`` raised another exception. Nothing is refunded; a person settles the payment
+    with :meth:`~aiogram_stars.StarsPayments.accept_payment` or
+    :meth:`~aiogram_stars.StarsPayments.reject_payment`."""
 
     def __str__(self) -> str:
         """Return the value, as ``format()`` does on every Python version."""
@@ -35,7 +41,8 @@ class RefundStatus(str, Enum):
     DONE = "done"
     """Telegram returned the Stars (or said they had been returned already)."""
     FAILED = "failed"
-    """Every attempt failed. ``on_refund_failed`` was called; a person has to look at it."""
+    """Every attempt failed. ``on_refund_failed`` was called; a person has to look at it and can
+    queue the refund again with :meth:`~aiogram_stars.StarsPayments.retry_refund`."""
 
     def __str__(self) -> str:
         """Return the value, as ``format()`` does on every Python version."""
@@ -85,6 +92,7 @@ class Refund:
         user_id: The payer, who gets the Stars back.
         status: See :class:`RefundStatus`.
         attempts: How many times sending was started, including one that is running now.
+            :meth:`~aiogram_stars.StarsPayments.retry_refund` sets it back to 0.
         next_attempt_at: The earliest time of the next attempt (UTC).
         created_at: When the refund was queued (UTC).
         updated_at: When the record last changed (UTC).

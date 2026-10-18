@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.methods import RefundStarPayment
+from aiogram.methods import RefundStarPayment, TelegramMethod
+from aiogram.methods.base import TelegramType
 
 from aiogram_stars import (
     PayloadSigner,
@@ -21,7 +22,7 @@ from aiogram_stars import (
 )
 from tests.conftest import database_url
 from tests.helpers import SECRET, USER_ID, Clock, connect_sqlalchemy, make_payment, make_stars
-from tests.telegram import FakeSession, payment_update
+from tests.telegram import TOKEN, FakeSession, payment_update
 
 PAYLOAD = PayloadSigner(SECRET).sign("order-1", 100)
 POLICY = RefundPolicy(max_attempts=3, first_delay=timedelta(seconds=30))
@@ -386,20 +387,41 @@ def test_refund_policy_refuses_settings_that_cannot_work(options: dict[str, obje
         RefundPolicy(**options)  # type: ignore[arg-type]
 
 
+class HeldTelegram(FakeSession):
+    """Answers a refund request only when the test says so."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.asked = asyncio.Event()
+        self.answer = asyncio.Event()
+
+    async def make_request(
+        self, bot: Bot, method: TelegramMethod[TelegramType], timeout: int | None = None
+    ) -> TelegramType:
+        if isinstance(method, RefundStarPayment):
+            self.asked.set()
+            await self.answer.wait()
+        return await super().make_request(bot, method, timeout)
+
+
 async def test_attempt_that_outlives_its_lease_is_not_recorded_twice(
-    bot: Bot, session: FakeSession, storage: Storage, clock: Clock, caplog: pytest.LogCaptureFixture
+    storage: Storage, clock: Clock, caplog: pytest.LogCaptureFixture
 ) -> None:
     policy = RefundPolicy(lease=timedelta(minutes=5))
     slow, fast = outbox(storage, clock, Desk(), refunds=policy), outbox(storage, clock, Desk())
     await slow.refund("charge-1", user_id=1)
-    session.delays[RefundStarPayment] = 0.05
+    slow_telegram, fast_telegram = HeldTelegram(), HeldTelegram()
 
-    stuck = asyncio.create_task(slow.send_due_refunds(bot))
-    await asyncio.sleep(0.01)  # the slow outbox is waiting for Telegram
+    stuck = asyncio.create_task(slow.send_due_refunds(Bot(TOKEN, session=slow_telegram)))
+    await asyncio.wait_for(slow_telegram.asked.wait(), 2)  # attempt 1 waits for Telegram
     clock.advance(minutes=5)
+    taking_over = asyncio.create_task(fast.send_due_refunds(Bot(TOKEN, session=fast_telegram)))
+    await asyncio.wait_for(fast_telegram.asked.wait(), 2)  # attempt 2 holds the lease now
     with caplog.at_level(logging.WARNING, logger="aiogram_stars"):
-        [taken_over] = await fast.send_due_refunds(bot)
+        slow_telegram.answer.set()
         assert await stuck == []
+        fast_telegram.answer.set()
+        [taken_over] = await taking_over
 
     assert (taken_over.status, taken_over.attempts) == (RefundStatus.DONE, 2)
     assert "the lease of the refund of charge charge-1 ran out during attempt 1" in caplog.text

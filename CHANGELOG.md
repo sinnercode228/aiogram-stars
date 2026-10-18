@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - Unreleased
+
+### Added
+
+- `StarsPayments.stuck_payments(limit=100)` lists the payments that only a person can finish,
+  oldest first: `error` ones, whose `on_paid` raised, and `processing` ones whose
+  `payment_lease` ran out because the process was killed inside `on_paid` or the database failed
+  while the outcome was stored. Telegram seldom sends such an update again, and in 0.1.0 nothing
+  listed these payments.
+- `accept_payment(charge_id)` and `reject_payment(charge_id, reason=...)` settle a stuck payment
+  by hand. `reject_payment` queues the refund in the same storage transaction, as
+  `RejectPayment` raised in `on_paid` does. Both raise `ValueError` for a payment whose lease is
+  still held or that is settled already, and `LookupError` for an unknown one; of two admins who
+  settle one payment at the same time, one succeeds. A settled payment is released, so the
+  handler that held it can no longer store its own outcome.
+- `failed_refunds(limit=100)` lists the refunds that ran out of attempts, and
+  `retry_refund(charge_id)` queues one again (pending, `attempts` back to 0, due now). It
+  replaces the SQL `UPDATE` that the 0.1.0 README showed for this.
+- `examples/shop_bot.py` has admin commands when `ADMIN_ID` is set: `/stuck` lists stuck
+  payments and failed refunds, `/accept` and `/reject` settle a payment, `/retry` queues a
+  refund again.
+- The README has a "Recovering stuck payments" section with a report job that the tests run.
+
+### Changed
+
+- Breaking for storages written outside this package: the `Storage` protocol has four new
+  methods, `list_stuck_payments`, `settle_stuck_payment`, `list_failed_refunds` and
+  `retry_refund`. A storage written for 0.1.0 has to add them; until it does, type checkers
+  reject it and the new `StarsPayments` methods raise `AttributeError` with it. While the version
+  is 0.x, the protocol can grow like this in a minor release. `MemoryStorage` and
+  `SqlAlchemyStorage` implement them; in `SqlAlchemyStorage` they are conditional `UPDATE`s like
+  the claims, and the tables are the same as in 0.1.0.
+- The error logged when `on_paid` finishes after its payment changed hands now names the outcome
+  that was not stored and also covers a payment that was settled by hand in the meantime. In
+  that case the lines that said the refund was queued (WARNING) or the payment was marked as an
+  error (ERROR) are no longer logged, since neither was stored.
+
+### Fixed
+
+- The README said that with polling an update handled just before a restart is fetched again.
+  That holds only with `handle_as_tasks=False`; with aiogram's default the next `getUpdates`
+  goes out at once and confirms it. Both READMEs now say so.
+
 ## [0.1.0] - 2026-10-17
 
 ### Added
@@ -50,4 +93,5 @@ All notable changes to this project are documented here. The format follows
 - `examples/shop_bot.py`, a runnable bot with `/buy`, `/refund <charge_id>` and `/paysupport`.
 - README in English and Russian; its quick start runs in the test suite.
 
+[0.2.0]: https://github.com/sinnercode228/aiogram-stars/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/sinnercode228/aiogram-stars/releases/tag/v0.1.0

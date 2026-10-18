@@ -27,7 +27,7 @@ from aiogram_stars import (
     RejectPayment,
     StarsPayments,
 )
-from tests.helpers import SECRET, make_stars
+from tests.helpers import SECRET, SweepWatch, make_stars
 from tests.telegram import FakeSession, payment_update, pre_checkout_update
 
 PAYLOAD = PayloadSigner(SECRET).sign("order-1", 100)
@@ -184,14 +184,17 @@ async def test_a_failed_sweep_is_logged_and_the_next_one_runs(
 
 
 async def test_manual_refund_wakes_the_running_outbox(bot: Bot, session: FakeSession) -> None:
-    stars = make_stars(refunds=QUIET)
+    storage = SweepWatch()
+    stars = make_stars(storage, refunds=QUIET)
     await stars.start(bot)
     try:
-        await asyncio.sleep(0.02)  # the first sweep found nothing and the outbox sleeps
+        await storage.next_idle()  # the first sweep found nothing; the next is an hour away
         await stars.refund("charge-1", user_id=1)
-        await eventually(lambda: bool(session.calls(RefundStarPayment)))
+        await storage.next_idle()
     finally:
         await stars.stop()
+
+    assert len(session.calls(RefundStarPayment)) == 1
 
 
 async def test_due_retry_is_sent_by_the_periodic_sweep(bot: Bot, session: FakeSession) -> None:

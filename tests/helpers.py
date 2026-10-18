@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -49,6 +50,25 @@ class Clock:
     def advance(self, **delta: float) -> datetime:
         self.now += timedelta(**delta)
         return self.now
+
+
+class SweepWatch(MemoryStorage):
+    """Tells when a sweep of the outbox has found no more due refunds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.idle = asyncio.Event()
+
+    async def claim_refund(self, *, token: str, now: datetime, until: datetime) -> Refund | None:
+        claimed = await super().claim_refund(token=token, now=now, until=until)
+        if claimed is None:
+            self.idle.set()
+        return claimed
+
+    async def next_idle(self) -> None:
+        """Wait for the end of the sweep that is running or about to run."""
+        await asyncio.wait_for(self.idle.wait(), timeout=2)
+        self.idle.clear()
 
 
 @asynccontextmanager

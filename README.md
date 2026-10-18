@@ -16,10 +16,10 @@ a demo coffee shop that runs as a Telegram Mini App, and made it work for any ai
 ## What goes wrong without it
 
 **`successful_payment` can arrive twice.** Telegram sends a webhook update again when the bot
-did not answer it in time. With polling, an update handled just before a restart is fetched
-again, because its offset is confirmed only by the next `getUpdates`. A handler that marks the
-order paid and ships it ships it twice. A check in process memory does not help when two bot
-processes share the traffic.
+did not answer it in time. With polling and `handle_as_tasks=False`, an update whose handler was
+cut off by a restart is fetched again, because aiogram confirms its offset only with the next
+`getUpdates`. A handler that marks the order paid and ships it ships it twice. A check in
+process memory does not help when two bot processes share the traffic.
 
 **A refund call fails and nothing retries it.** `refundStarPayment` is one HTTP request made
 from a handler. A timeout, a 502 from Telegram or flood control (429 with `retry_after`) raises,
@@ -187,7 +187,9 @@ PostgreSQL database: `on_paid` runs once. When both reject the payment, it is re
 
 If the process dies while `on_paid` runs, the row stays `processing`. An update for that charge
 that arrives after the lease ran out takes the payment over and calls `on_paid` again. Telegram
-seldom sends such an update, see [Limits](#limits).
+seldom sends such an update, so once the lease has run out the payment is listed by
+`stars.stuck_payments()` for a person to settle, see
+[Recovering stuck payments](#recovering-stuck-payments).
 
 On shutdown the dispatcher calls `StarsPayments.stop()`, which waits up to `payment_lease` for
 the `on_paid` calls still running. `dp.run_polling()` ends in `asyncio.run()`, which would
@@ -230,7 +232,8 @@ engine. If Alembic manages your schema, add `aiogram_stars.sqlalchemy.metadata` 
 
 There is no `SELECT ... FOR UPDATE` and no advisory lock. Every claim is an
 `INSERT ... ON CONFLICT DO NOTHING` or a conditional `UPDATE` in a short transaction, and its
-`WHERE` clause decides which process gets the row. The tables on PostgreSQL:
+`WHERE` clause decides which process gets the row. Settling a stuck payment by hand and queueing
+a failed refund again are conditional `UPDATE`s too. The tables on PostgreSQL:
 
 ```sql
 CREATE TABLE stars_payments (
@@ -272,11 +275,14 @@ CREATE INDEX ix_stars_refunds_due ON stars_refunds (status, next_attempt_at);
 On SQLite the time columns are `DATETIME` and hold UTC without an offset; the storage turns
 them back into aware UTC datetimes.
 
-Your own storage implements the seven async methods of the
+Your own storage implements the eleven async methods of the
 [`Storage`](https://github.com/sinnercode228/aiogram-stars/blob/main/src/aiogram_stars/_storage.py)
-protocol: `claim_payment`, `settle_payment`, `get_payment`, `add_refund`, `get_refund`,
-`claim_refund` and `finish_refund_attempt`. It must keep one payment and one refund per charge
-id, make each method atomic across processes, and raise `ValueError` for a naive datetime.
+protocol: `claim_payment`, `settle_payment`, `get_payment`, `list_stuck_payments`,
+`settle_stuck_payment`, `add_refund`, `get_refund`, `claim_refund`, `finish_refund_attempt`,
+`list_failed_refunds` and `retry_refund`; `list_stuck_payments`, `settle_stuck_payment`,
+`list_failed_refunds` and `retry_refund` are new in 0.2.0. It must keep one payment and one
+refund per charge id, make each method atomic across processes, and raise `ValueError` for a
+naive datetime or a `limit` below 1.
 [`tests/test_storage.py`](https://github.com/sinnercode228/aiogram-stars/blob/main/tests/test_storage.py)
 runs one contract against the memory, SQLite and PostgreSQL storages; point its `storage`
 fixture at yours.
@@ -311,7 +317,7 @@ StarsPayments(
 | `previous_secrets` | Old keys. Their payloads verify; nothing new is signed with them. |
 | `checkout_timeout` | Seconds `check` may take, a number above 0 and below 10. |
 | `checkout_error` | What the buyer reads when the payload does not verify or `check` is slow or broken. It must not be blank, since Telegram requires an error message with every decline. Set it in your bot's language. |
-| `payment_lease` | A `timedelta`. How long a payment stays with the handler processing it; after that a repeated update may run `on_paid` again. It is also the longest shutdown waits for running `on_paid` calls. Make it longer than `on_paid` ever takes. |
+| `payment_lease` | A `timedelta`. How long a payment stays with the handler processing it; after that `stuck_payments()` lists it and a repeated update may run `on_paid` again. It is also the longest shutdown waits for running `on_paid` calls. Make it longer than `on_paid` ever takes. |
 | `refunds` | A `RefundPolicy`, see below. |
 | `clock` | Returns the current time as an aware `datetime`. Tests pass their own. |
 
@@ -393,6 +399,11 @@ aiogram's startup hooks at all, call `await stars.start(bot)` and `await stars.s
 | `await get_payment(charge_id)`, `await get_refund(charge_id)` | The stored record, or `None`. |
 | `await refund(charge_id, *, user_id=None, reason=None)` | Queues a refund and returns it. |
 | `await send_due_refunds(bot)` | One attempt at every due refund, now, in the calling task. |
+| `await stuck_payments(*, limit=100)` | The payments a person has to settle: `error`, and `processing` past their lease. |
+| `await accept_payment(charge_id)` | Marks a stuck payment `accepted`. |
+| `await reject_payment(charge_id, *, reason)` | Marks a stuck payment `rejected` and queues its refund in the same transaction. |
+| `await failed_refunds(*, limit=100)` | The refunds that ran out of attempts. |
+| `await retry_refund(charge_id)` | Queues a failed refund again. |
 | `await cancel_subscription(bot, charge_id, *, user_id=None, is_canceled=True)` | Stops a subscription from renewing. |
 | `await start(bot, **data)`, `await stop()`, `running` | Run the outbox by hand. |
 
@@ -402,19 +413,22 @@ aiogram's startup hooks at all, call `await stars.start(bot)` and `await stars.s
 enums: `str(PaymentStatus.ACCEPTED) == "accepted"`. All times are aware UTC datetimes.
 
 The library logs through the `aiogram_stars` logger. INFO: repeated updates, finished refunds,
-declines by `check`. WARNING: payloads declined at pre-checkout, payments rejected by `on_paid`,
-refund retries, flood control. ERROR: what a person should look at, such as a slow or broken
-`check`, an `on_paid` that raised, a paid invoice whose payload did not verify, a refund that
-failed for good, a sweep that could not reach the storage, a payment still running at shutdown.
+declines by `check`, payments settled and refunds queued again by hand. WARNING: payloads
+declined at pre-checkout, payments rejected by `on_paid`, refund retries, flood control. ERROR:
+what a person should look at, such as a slow or broken `check`, an `on_paid` that raised, a
+paid invoice whose payload did not verify, a refund that failed for good, a sweep that could not
+reach the storage, a payment still running at shutdown.
 Send its ERROR records wherever you get alerts.
 
 ## Refund outbox
 
-A refund is queued in two ways: `RejectPayment` raised in `on_paid`, or a call to
-`stars.refund(charge_id, reason=...)`. The call stores the refund and returns it; nothing is sent
-from the calling task. A second call for the same charge returns the refund already stored. A
-charge the storage does not know needs `user_id=`, otherwise the call raises `LookupError`, and
-a `user_id` that is not the payer's raises `ValueError`.
+A refund is queued when `on_paid` raises `RejectPayment` or the payload of a paid invoice does
+not verify, when a stuck payment is rejected by hand with `stars.reject_payment` (see
+[Recovering stuck payments](#recovering-stuck-payments)), or by a call to
+`stars.refund(charge_id, reason=...)`. That call stores the refund and returns it; nothing is
+sent from the calling task. A second call for the same charge returns the refund already stored.
+A charge the storage does not know needs `user_id=`, otherwise the call raises `LookupError`,
+and a `user_id` that is not the payer's raises `ValueError`.
 
 The background task (`aiogram-stars-refunds`) starts with the dispatcher. It looks for due
 refunds right after a refund is queued in the same process and otherwise every `poll_interval`.
@@ -447,15 +461,75 @@ them. Use it from a job of your own if the bot does not run the background task,
 in them is logged and does not change the refund. If the process dies between storing the
 result and the callback, the callback is skipped; the status in the table is still right.
 
-There is no method to send a `failed` refund again. To queue it again, reset the row:
+`await stars.failed_refunds()` lists the refunds that ran out of attempts, and
+`await stars.retry_refund(charge_id)` queues one again, see
+[Recovering stuck payments](#recovering-stuck-payments).
 
-```sql
-UPDATE stars_refunds
-SET status = 'pending', attempts = 0, next_attempt_at = now()
-WHERE charge_id = '...' AND status = 'failed';
+## Recovering stuck payments
+
+The methods in this section are new in 0.2.0. Two kinds of records wait for a person: a payment
+that nothing settles any more, and a refund that ran out of attempts.
+
+A payment is stuck when it is `error`, because `on_paid` raised, or still `processing` after its
+`payment_lease` ran out, because the process was killed inside `on_paid` or the database failed
+while the outcome was stored. `on_paid` does not run again for an `error` payment, even if the
+update comes again, and for a `processing` one only if Telegram sends the update again, which it
+seldom does (see [Limits](#limits)). `await stars.stuck_payments()` lists such payments, oldest
+first, at most `limit` of them (100 by default). Find out what happened to the order, then
+settle the payment:
+
+| Call | Payment | Refund |
+| --- | --- | --- |
+| `await stars.accept_payment(charge_id)` | `accepted`; `error` keeps what `on_paid` raised | none is queued; a refund queued earlier for the charge stays as it is |
+| `await stars.reject_payment(charge_id, reason=...)` | `rejected`, `error` is `reason` | queued in the same transaction, with `reason`, as `RejectPayment` raised in `on_paid` does; a refund queued earlier for the charge is kept as it is, so a `failed` one needs `retry_refund` |
+
+Both return the payment as stored. They change it only while it is stuck (on SQL, with one
+conditional `UPDATE`), so a payment whose lease has not run out, and whose `on_paid` may still
+be running, raises `ValueError`, and so does a payment that is settled already. Of two admins
+who settle one payment at the same moment, one gets the payment and the other a `ValueError`.
+A charge the storage does not know raises `LookupError`. Settling releases the lease: the
+process that held the payment can no longer store its own outcome, and a late copy of the
+update does not call `on_paid`.
+
+A process that is alive but slower than `payment_lease` is still inside `on_paid` when its
+payment becomes stuck. If you settle the payment then, your outcome stays, the outcome of
+`on_paid` is dropped, and an ERROR log line says so. This is one more reason to make
+`payment_lease` longer than `on_paid` ever takes.
+
+`await stars.failed_refunds()` lists the refunds that ran out of attempts, oldest first, with the
+error in `last_error`. Once the cause is fixed, `await stars.retry_refund(charge_id)` queues one
+again: it becomes `pending` and due now, `attempts` goes back to 0, so it gets `max_attempts`
+attempts again, and the outbox sends it. A refund that is not `failed` raises `ValueError`, a
+charge with no refund `LookupError`. If the refund fails again, the outbox calls
+`on_refund_failed` again; if it goes through, `on_refunded`.
+
+A job that sends both lists to an admin chat:
+
+```python
+from aiogram import Bot
+from aiogram_stars import StarsPayments
+
+ADMIN_CHAT_ID = 123456789  # where the report goes
+
+
+async def report_stuck(stars: StarsPayments, bot: Bot) -> None:
+    lines = [
+        f"payment {p.charge_id}: order {p.order_id}, {p.amount} Stars, {p.error or p.status}"
+        for p in await stars.stuck_payments(limit=20)
+    ]
+    lines += [f"refund {r.charge_id}: {r.last_error}" for r in await stars.failed_refunds(limit=20)]
+    text = "\n".join(lines)
+    for start in range(0, len(text), 4096):  # a message holds up to 4096 characters
+        # parse_mode=None: errors are plain text, whatever the bot's default parse mode
+        await bot.send_message(ADMIN_CHAT_ID, text[start : start + 4096], parse_mode=None)
 ```
 
-On SQLite use `CURRENT_TIMESTAMP` instead of `now()`. The next sweep picks the refund up.
+Run it from a scheduler of your own, or once after startup.
+[`tests/test_readme.py`](https://github.com/sinnercode228/aiogram-stars/blob/main/tests/test_readme.py)
+runs it too.
+[`examples/shop_bot.py`](https://github.com/sinnercode228/aiogram-stars/blob/main/examples/shop_bot.py)
+does the same with admin commands for the user in `ADMIN_ID`: `/stuck` shows both lists, and
+`/accept`, `/reject` and `/retry` take a charge id.
 
 ## Subscriptions
 
@@ -486,9 +560,9 @@ period (from `subscription_expiration_date`).
 renew. `is_canceled=False` lets the user renew a subscription the bot canceled. `user_id=` is
 needed only for a charge the storage does not know.
 
-Renewals keep the payload that was signed when the subscription started, so keep a retired
-secret in `previous_secrets` for as long as subscriptions signed with it are active. A renewal
-that is rejected, by `on_paid` or because its payload no longer verifies, is refunded, but the
+Renewals keep the payload that was signed when the subscription started, so keep a retired secret
+in `previous_secrets` for as long as subscriptions signed with it are active. A renewal that is
+rejected, by `on_paid`, by hand or because its payload no longer verifies, is refunded, but the
 subscription goes on and is charged again next month; call `cancel_subscription` as well.
 
 ## Limits
@@ -497,23 +571,19 @@ subscription goes on and is charged again next month; call `cancel_subscription`
   storage with the bot it was started with. Two bots need two `StarsPayments` and two sets of
   tables; on shared tables each outbox would try the other bot's refunds.
 - **Only Stars.** Invoices in other currencies, paid media and gifts are left to you.
-- **A payment can get stuck in `processing`.** Telegram almost never sends a `successful_payment`
+- **A stuck payment waits for a person.** Telegram almost never sends a `successful_payment`
   update twice: polling confirms it with the next `getUpdates`, and a webhook gets its 200 at
   once with `handle_in_background=True`. So if the process is killed inside `on_paid` (SIGKILL,
-  out of memory, a supervisor that does not wait `payment_lease`), the payment stays
-  `processing`. If the database fails while the outcome is stored, the same happens; if it fails
-  while the payment is first recorded, there is no row at all, and the log line and
-  `getStarTransactions` are the only trace (the library does not call `getStarTransactions`).
-  Nothing lists stuck payments for you; query them:
-
-  ```sql
-  SELECT charge_id, user_id, order_id, amount, status, error, updated_at
-  FROM stars_payments
-  WHERE status = 'error' OR (status = 'processing' AND leased_until < now());
-  ```
-
-  Then hand over the goods yourself, or give the Stars back with `await stars.refund(charge_id)`.
-  `error` payments need the same treatment: nothing calls `on_paid` again.
+  out of memory, a supervisor that does not wait `payment_lease`), or the database fails while
+  the outcome is stored, the payment stays `processing`, and most likely nothing calls
+  `on_paid` for it again; nothing calls it again for an `error` payment either. Once the lease
+  has run out, `stuck_payments()` lists the payment and you settle it by hand, see
+  [Recovering stuck payments](#recovering-stuck-payments). The library never calls
+  `stuck_payments()` itself and logs nothing about a payment whose process was killed, so run a
+  job that calls it, such as the report there. On SQL each call reads the whole
+  `stars_payments` table, since no index covers `status`. If the database fails while the
+  payment is first recorded, there is no row at all, and the log line and `getStarTransactions`
+  are the only trace (the library does not call `getStarTransactions`).
 - **Every unverified payment is refunded.** That includes invoices sent before the bot used this
   library, renewals of subscriptions started before it, and payloads signed with a secret that
   is no longer in `previous_secrets`. To keep handling an old format, register its handlers on
@@ -529,7 +599,8 @@ subscription goes on and is charged again next month; call `cancel_subscription`
   ```
 
 - **Callbacks are not retried.** `on_refunded` and `on_refund_failed` run once, and so does
-  `on_paid` (see the table above).
+  `on_paid` (see the table above). A refund queued again with `retry_refund` starts its attempts
+  over, so if it fails again, `on_refund_failed` runs once more.
 - **The pre-checkout timeout covers `check` only.** The time the update took to reach the bot
   and the `answerPreCheckoutQuery` request itself come out of the same 10 seconds.
 - **The tests do not talk to Telegram.** They run against a fake Bot API session whose replies go
@@ -630,8 +701,9 @@ has an entry in [CHANGELOG.md](https://github.com/sinnercode228/aiogram-stars/bl
 
 1. Set the version in `pyproject.toml` and `__version__` in `src/aiogram_stars/__init__.py`;
    `tests/test_packaging.py` fails if the two differ.
-2. In `CHANGELOG.md`, replace `Unreleased` in the version's heading with the release date.
-3. Commit, then push a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+2. In `CHANGELOG.md`, replace `Unreleased` in the version's heading with the release date, and
+   point the version's link at its tag.
+3. Commit, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
 [`release.yml`](https://github.com/sinnercode228/aiogram-stars/blob/main/.github/workflows/release.yml)
 checks that the tag matches the version, runs the tests (without PostgreSQL; the CI workflow
