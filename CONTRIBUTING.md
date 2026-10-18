@@ -74,11 +74,12 @@ among others it wants Google-style docstrings on public objects, annotations eve
 - **Test first.** Every change in behaviour comes with a test that failed before it, and a bug
   fix starts with the test that shows the bug. Run the new test against `main` and see it fail,
   then fix the code. The test and the fix go in the same commit.
-- **Where tests go.** One module per part: `test_payload.py` for signing,
-  `test_pre_checkout.py`, `test_payments.py`, `test_refunds.py`, `test_recovery.py`,
-  `test_subscriptions.py`, `test_lifecycle.py` for startup and shutdown, `test_storage.py` for
-  the storage contract, `test_concurrency.py` for two dispatchers on one database,
-  `test_example.py` for `examples/shop_bot.py`, `test_readme.py` for the READMEs.
+- **Where tests go.** One module per part: `test_payload.py` for signing, `test_invoices.py`
+  for invoices and invoice links, `test_pre_checkout.py`, `test_payments.py`, `test_refunds.py`,
+  `test_recovery.py`, `test_subscriptions.py`, `test_lifecycle.py` for startup and shutdown,
+  `test_storage.py` for the storage contract, `test_concurrency.py` for two dispatchers on one
+  database, `test_example.py` for `examples/shop_bot.py`, `test_readme.py` for the READMEs,
+  `test_packaging.py` for the extras and the version.
 - **Test tools.** `tests/telegram.py` is a fake Bot API: `FakeSession` records every call
   (`session.calls(RefundStarPayment)`) and fails one on request
   (`session.fail(RefundStarPayment, "Bad Request: BALANCE_TOO_LOW")`), and its replies go
