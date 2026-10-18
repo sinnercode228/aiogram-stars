@@ -241,6 +241,63 @@ async def test_admin_rejecting_a_payment_is_told_about_the_refund_the_buyer_aske
     assert payment.status is PaymentStatus.REJECTED
 
 
+@pytest.mark.parametrize(
+    ("refund_status", "reply"),
+    [
+        (
+            RefundStatus.PENDING,
+            "Payment ch-1 is accepted, but the refund queued for it before is still on its way.",
+        ),
+        (RefundStatus.DONE, "Payment ch-1 is accepted, but its Stars were refunded already."),
+        (
+            RefundStatus.FAILED,
+            "Payment ch-1 is accepted, but the refund queued for it before failed; /stuck still "
+            "lists that refund.",
+        ),
+    ],
+    ids=["pending", "refunded", "failed"],
+)
+async def test_admin_accepting_a_payment_is_told_that_it_is_refunded_all_the_same(
+    shop_bot: ModuleType,
+    bot: Bot,
+    session: FakeSession,
+    *,
+    refund_status: RefundStatus,
+    reply: str,
+) -> None:
+    storage = MemoryStorage()
+    dp, stars = shop_bot.create_dispatcher(storage, SECRET, admin_id=ADMIN_ID)
+    await dp.feed_update(bot, message_update(bot, "/buy"))
+    [invoice] = session.calls(SendInvoice)
+    session.fail(SendMessage, "Forbidden: bot was blocked by the user", status=403)
+    with pytest.raises(TelegramForbiddenError):
+        await dp.feed_update(bot, payment_update(bot, invoice.payload, 50, charge_id="ch-1"))
+    # The buyer asks for the Stars back before the admin gets to the stuck payment.
+    await dp.feed_update(bot, message_update(bot, "/refund ch-1"))
+    if refund_status is RefundStatus.DONE:
+        [refund] = await stars.send_due_refunds(bot)
+        assert refund.status is RefundStatus.DONE
+    elif refund_status is RefundStatus.FAILED:
+        # Let the refund fail for good, as its last attempt would.
+        later = datetime.now(timezone.utc) + timedelta(hours=1)
+        assert await storage.claim_refund(token="w", now=later, until=later + timedelta(minutes=5))
+        assert await storage.finish_refund_attempt(
+            "ch-1",
+            token="w",
+            status=RefundStatus.FAILED,
+            error="TelegramBadRequest: Telegram server says - Bad Request: BALANCE_TOO_LOW",
+            next_attempt_at=later,
+            now=later,
+        )
+
+    await dp.feed_update(bot, message_update(bot, "/accept ch-1", user_id=ADMIN_ID))
+
+    assert texts(session)[-1] == reply
+    refund = await stars.get_refund("ch-1")
+    assert refund is not None
+    assert refund.status is refund_status, "accepting the payment leaves its refund as it is"
+
+
 async def test_long_stuck_list_is_split_into_messages_telegram_accepts(
     shop_bot: ModuleType, bot: Bot, session: FakeSession
 ) -> None:

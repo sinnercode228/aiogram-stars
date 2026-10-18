@@ -172,6 +172,18 @@ def after_reject(refund: Refund | None) -> str:
     return f", but its refund failed: /retry {refund.charge_id} sends it again."
 
 
+def after_accept(refund: Refund | None) -> str:
+    """What the admin should know about a refund of a payment they accepted."""
+    # accept_payment leaves a refund queued before, by the buyer's /refund for example, as it is.
+    if refund is None:
+        return "."
+    if refund.status is RefundStatus.PENDING:
+        return ", but the refund queued for it before is still on its way."
+    if refund.status is RefundStatus.DONE:
+        return ", but its Stars were refunded already."
+    return ", but the refund queued for it before failed; /stuck still lists that refund."
+
+
 def create_admin_router(stars: StarsPayments, admin_id: int) -> Router:
     """Commands for the shop owner: the payments and refunds that need a person."""
     router = Router(name="admin")
@@ -211,7 +223,8 @@ def create_admin_router(stars: StarsPayments, admin_id: int) -> Router:
                 order = shop.get(payment.order_id)
                 if order is not None and not order.paid:
                     order.charge_id = charge_id
-                answer = f"Payment {charge_id} is accepted."
+                refund = await stars.get_refund(charge_id)
+                answer = f"Payment {charge_id} is accepted{after_accept(refund)}"
             elif command.command == "reject":
                 await stars.reject_payment(charge_id, reason=GIVE_BACK)
                 refund = await stars.get_refund(charge_id)
