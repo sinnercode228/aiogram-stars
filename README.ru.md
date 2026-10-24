@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml/badge.svg)](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
+[![Python versions](https://img.shields.io/pypi/pyversions/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
 
 Оплата в Telegram Stars для ботов на aiogram 3. От вас две async-функции: `check` решает,
 принимать ли платёж, `on_paid` выдаёт товар. Библиотека отвечает на pre-checkout раньше, чем
@@ -754,6 +755,10 @@ pytest --cov
 объектов есть docstring, логи пишутся через `logging.getLogger(__name__)`. Новый метод в
 `Storage` ломает все хранилища, написанные вне этого репозитория, поэтому сначала откройте
 issue. Баги и вопросы — в [GitHub issues](https://github.com/sinnercode228/aiogram-stars/issues).
+
+Остальное (самые старые поддерживаемые версии, проверка примеров из README, CHANGELOG, стиль
+коммитов) описано в [CONTRIBUTING.md](https://github.com/sinnercode228/aiogram-stars/blob/main/CONTRIBUTING.md),
+по-английски, с коротким разделом на русском в конце.
 
 ## Лицензия
 

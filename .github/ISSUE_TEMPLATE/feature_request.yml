@@ -1,0 +1,51 @@
+name: Feature request
+description: Something aiogram-stars could do for a bot that takes Stars.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        What the library leaves to you today is listed under
+        [Limits](https://github.com/sinnercode228/aiogram-stars/blob/main/README.md#limits) in the
+        README; a request to change one of those is welcome too.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What your bot needs
+      description: The payment, refund or subscription flow you cannot handle now, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: How you would like to call it. Code is welcome.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do now
+      description: Your workaround, or other libraries you looked at.
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Does it need a new method on the Storage protocol?
+      description: >-
+        A new Storage method breaks every storage written outside this repository, so such a
+        change is agreed in the issue before a pull request.
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you send a pull request?
+      options:
+        - "Yes"
+        - Maybe, with some help
+        - "No"

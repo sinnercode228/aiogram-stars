@@ -4,6 +4,7 @@ English · [Русский](https://github.com/sinnercode228/aiogram-stars/blob/
 
 [![CI](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml/badge.svg)](https://github.com/sinnercode228/aiogram-stars/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
+[![Python versions](https://img.shields.io/pypi/pyversions/aiogram-stars.svg)](https://pypi.org/project/aiogram-stars/)
 
 Telegram Stars payments for aiogram 3. You write `check`, which decides whether to take a
 payment, and `on_paid`, which hands over the goods. aiogram-stars answers the pre-checkout query
@@ -746,6 +747,10 @@ test that shows the bug. The code stays `mypy --strict` clean, public objects ha
 and logging goes through `logging.getLogger(__name__)`. A new method on `Storage` breaks every
 storage written outside this repository, so open an issue before proposing one. Bugs and
 questions go to [GitHub issues](https://github.com/sinnercode228/aiogram-stars/issues).
+
+[CONTRIBUTING.md](https://github.com/sinnercode228/aiogram-stars/blob/main/CONTRIBUTING.md) has the rest:
+the lowest supported versions, how the README samples are tested, the changelog and the commit
+style.
 
 ## License
 
