@@ -1,6 +1,6 @@
 # Contributing to aiogram-stars
 
-Bug reports, fixes, tests and corrections to the READMEs are welcome. This file says how to set
+Bug reports, fixes, tests and corrections to the READMEs and the docs are welcome. This file says how to set
 up the project, which checks a change has to pass, and how changes are made here. A short
 Russian version is at the end.
 
@@ -78,7 +78,7 @@ among others it wants Google-style docstrings on public objects, annotations eve
   for invoices and invoice links, `test_pre_checkout.py`, `test_payments.py`, `test_refunds.py`,
   `test_recovery.py`, `test_subscriptions.py`, `test_lifecycle.py` for startup and shutdown,
   `test_storage.py` for the storage contract, `test_concurrency.py` for two dispatchers on one
-  database, `test_example.py` for `examples/shop_bot.py`, `test_readme.py` for the READMEs,
+  database, `test_example.py` for `examples/shop_bot.py`, `test_readme.py` for the READMEs and docs/,
   `test_packaging.py` for the extras and the version.
 - **Test tools.** `tests/telegram.py` is a fake Bot API: `FakeSession` records every call
   (`session.calls(RefundStarPayment)`) and fails one on request
@@ -95,23 +95,30 @@ among others it wants Google-style docstrings on public objects, annotations eve
   through `logging.getLogger(__name__)`, and settings that cannot work raise `ValueError` when
   the object is created.
 
-## The READMEs
+## The READMEs and the docs
 
-README.md is in English and README.ru.md in Russian; a change to one goes to the other in the
-same pull request. README.md is also the project description on PyPI, so links to files in the
-repository are absolute GitHub URLs, as in the rest of the README.
+README.md is in English and README.ru.md in Russian. The README is short: what the library
+solves, install, the quick start, storage, subscriptions and links. The details are in docs/, one
+page per topic, each with a Russian version next to it (`how-it-works.md` and
+`how-it-works.ru.md`). A change to one language goes to the other in the same pull request.
+README.md is also the project description on PyPI, so links from it to files in the repository
+are absolute GitHub URLs; the pages in docs/ link each other with relative links.
 
-`tests/test_readme.py` runs two samples:
+`tests/test_readme.py` runs three samples:
 
-- **The quick start**, the first `python` block. It has to be the same in both READMEs, character
-  for character, and the test runs it against the fake Bot API: an invoice, the pre-checkout
-  answer, one payment fed twice, and a sold-out order that is refunded.
-- **The stuck payment report**, the block that defines `report_stuck`. Each README comments it
-  in its own language, and the code has to be the same once the comments are removed. The tests
-  run it from both READMEs.
+- **The quick start**, the first `python` block of the READMEs. It has to be the same in both,
+  character for character, and the test runs it against the fake Bot API: an invoice, the
+  pre-checkout answer, one payment fed twice, and a sold-out order that is refunded.
+- **The stuck payment report**, the block in `docs/failure-modes.md` that defines
+  `report_stuck`. Each language comments it in its own way, and the code has to be the same once
+  the comments are removed. The tests run it from both pages.
+- **The bot test**, the block in `docs/testing.md` that defines `RecordingSession`. It has to be
+  the same in both languages, and the test runs the test function it defines.
 
-The other code blocks are not run, so check them by hand. The sdist ships both READMEs and the
-tests, so this test also runs from an unpacked sdist.
+It also checks that every link to a file of the repository, absolute or relative, points at a
+file and heading that exist, and that both READMEs link every page of docs/ in their language.
+The other code blocks are not run, so check them by hand. The sdist ships the READMEs, docs/ and
+the tests, so this test also runs from an unpacked sdist, without the link check.
 
 ## Changelog
 
@@ -119,7 +126,8 @@ tests, so this test also runs from an unpacked sdist.
 Add the entry under the next version's heading, `## [<version>] - Unreleased` (create it if it
 is not there), in `Added`, `Changed` or `Fixed`, and write it for someone who uses the library.
 A change that breaks existing code or storages written outside the package says so at the start
-of its entry. Releases are made by the maintainer, as the README's Releasing section describes.
+of its entry. Releases are made by the maintainer, as
+[docs/releasing.md](docs/releasing.md) describes.
 
 ## Commits and pull requests
 
@@ -135,11 +143,9 @@ of its entry. Releases are made by the maintainer, as the README's Releasing sec
 
 ## По-русски
 
-Окружение, команды и правила те же, что выше; коротко они описаны в разделе
-[«Разработка»](https://github.com/sinnercode228/aiogram-stars/blob/main/README.ru.md#разработка)
-README.ru.md. Любое изменение поведения приходит с тестом, который до него падал. Перед
-pull request прогоните `ruff check`, `ruff format --check`, `mypy --strict src`, `mypy` и
-`pytest` (тесты на PostgreSQL включает `STARS_TEST_POSTGRES_URL`). Меняя README.md, поменяйте и
-README.ru.md: `tests/test_readme.py` сверяет их примеры. Запись в CHANGELOG.md добавьте под
-заголовок следующей версии. Вопросы и баги пишите в issues, об уязвимостях сообщайте так, как
-написано в SECURITY.md.
+Окружение, команды и правила те же, что выше. Любое изменение поведения приходит с тестом,
+который до него падал. Перед pull request прогоните `ruff check`, `ruff format --check`,
+`mypy --strict src`, `mypy` и `pytest` (тесты на PostgreSQL включает `STARS_TEST_POSTGRES_URL`).
+Меняя README.md или страницу в docs/, поменяйте и русскую версию: `tests/test_readme.py` сверяет
+их примеры. Запись в CHANGELOG.md добавьте под заголовок следующей версии. Вопросы и баги пишите в
+issues, об уязвимостях сообщайте так, как написано в SECURITY.md.

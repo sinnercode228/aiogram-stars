@@ -6,8 +6,8 @@ body:
     attributes:
       value: |
         What the library leaves to you today is listed under
-        [Limits](https://github.com/sinnercode228/aiogram-stars/blob/main/README.md#limits) in the
-        README; a request to change one of those is welcome too.
+        [Limits](https://github.com/sinnercode228/aiogram-stars/blob/main/docs/failure-modes.md#limits) in
+        the docs; a request to change one of those is welcome too.
   - type: textarea
     id: problem
     attributes:

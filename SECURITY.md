@@ -64,8 +64,8 @@ Out of scope:
   part is in scope.
 - Your bot's own code: `check`, `on_paid`, the refund callbacks, and where you keep the bot token
   and the payload secret.
-- The behaviour the README lists under
-  [Limits](https://github.com/sinnercode228/aiogram-stars/blob/main/README.md#limits), such as
+- The behaviour the docs list under
+  [Limits](https://github.com/sinnercode228/aiogram-stars/blob/main/docs/failure-modes.md#limits), such as
   one bot per `StarsPayments` and every unverified payment being refunded.
 - `examples/shop_bot.py`, unless it shows a flaw in the library. A problem in the example itself
   is welcome as an ordinary issue.

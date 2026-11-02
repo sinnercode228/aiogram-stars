@@ -1,5 +1,5 @@
 name: Bug report
-description: aiogram-stars does something other than the README says.
+description: aiogram-stars does something other than the README or the docs say.
 labels: ["bug"]
 body:
   - type: markdown
@@ -77,7 +77,7 @@ body:
     id: expected
     attributes:
       label: What you expected
-      description: If the README says otherwise, link the passage.
+      description: If the README or the docs say otherwise, link the passage.
     validations:
       required: true
   - type: textarea

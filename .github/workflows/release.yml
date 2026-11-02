@@ -2,7 +2,7 @@ name: Release
 
 # Push a tag like v0.1.0 to build the package and publish it to PyPI.
 # Publishing uses PyPI trusted publishing, so no API token is stored in GitHub;
-# the README says which publisher to register on PyPI once.
+# docs/releasing.md says which publisher to register on PyPI once.
 
 on:
   push:

@@ -4,5 +4,6 @@
 - [ ] `ruff check` and `ruff format --check` pass
 - [ ] `mypy --strict src` and `mypy` pass
 - [ ] `pytest` passes, also with `STARS_TEST_POSTGRES_URL` set if storage code changed
-- [ ] README.md and README.ru.md say the same, and `tests/test_readme.py` passes
+- [ ] README.md and README.ru.md, and each page in docs/ and its .ru.md version, say the same, and
+  `tests/test_readme.py` passes
 - [ ] An entry in CHANGELOG.md under the next version

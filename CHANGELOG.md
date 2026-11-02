@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - Unreleased
+
+### Changed
+
+- The READMEs are short: what the library solves, install, the quick start, storage,
+  subscriptions and links. The details moved, with the same content, to pages in `docs/` in
+  English and Russian: how it works, configuration, failure modes (with recovering stuck
+  payments and the limits), testing your bot, and releasing. The stuck payment report and the
+  bot test sample run in the test suite from there, and the sdist ships `docs/*.md`.
+
 ## [0.2.0] - 2026-10-18
 
 ### Added
@@ -93,5 +103,6 @@ All notable changes to this project are documented here. The format follows
 - `examples/shop_bot.py`, a runnable bot with `/buy`, `/refund <charge_id>` and `/paysupport`.
 - README in English and Russian; its quick start runs in the test suite.
 
+[0.2.1]: https://github.com/sinnercode228/aiogram-stars/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/sinnercode228/aiogram-stars/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sinnercode228/aiogram-stars/releases/tag/v0.1.0

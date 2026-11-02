@@ -1,4 +1,4 @@
-"""The quick start in the READMEs runs against the fake Bot API."""
+"""The samples in the READMEs and in docs/ run against the fake Bot API, and their links resolve."""
 
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ from tests.telegram import TOKEN, FakeSession, message_update, payment_update, p
 ROOT = Path(__file__).parents[1]
 TELEGRAM_MESSAGE_LIMIT = 4096  # characters of text in one message
 CODE_BLOCK = re.compile(r"^```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
+REPOSITORY = "https://github.com/sinnercode228/aiogram-stars/blob/main/"
+LINK = re.compile(r"\]\(([^)\s]+)\)")
+DOCUMENTS = sorted([*ROOT.glob("*.md"), *ROOT.glob("docs/*.md")])
 
 
 def quick_start(readme: str) -> str:
@@ -29,12 +32,22 @@ def quick_start(readme: str) -> str:
     return found.group(1)
 
 
-def recovery_report(readme: str) -> str:
-    """The Python block of ``readme`` that reports stuck payments to an admin."""
-    text = (ROOT / readme).read_text(encoding="utf-8")
+def code_block(page: str, marker: str) -> str:
+    """The one Python block of ``page`` that contains ``marker``."""
+    text = (ROOT / page).read_text(encoding="utf-8")
     blocks = [found.group(1) for found in CODE_BLOCK.finditer(text)]
-    [block] = [block for block in blocks if "def report_stuck" in block]
+    [block] = [block for block in blocks if marker in block]
     return block
+
+
+def recovery_report(page: str) -> str:
+    """The Python block of ``page`` that reports stuck payments to an admin."""
+    return code_block(page, "def report_stuck")
+
+
+def bot_testing_sample(page: str) -> str:
+    """The Python block of ``page`` that tests a bot with a recording Bot API session."""
+    return code_block(page, "class RecordingSession")
 
 
 def test_both_readmes_have_the_same_quick_start() -> None:
@@ -45,15 +58,16 @@ def without_comments(code: str) -> str:
     return re.sub(r"\s*#.*$", "", code, flags=re.MULTILINE)
 
 
-def test_both_readmes_have_the_same_recovery_report() -> None:
-    # Each README comments the code in its own language; the code is the same.
-    russian, english = recovery_report("README.ru.md"), recovery_report("README.md")
+def test_both_failure_pages_have_the_same_recovery_report() -> None:
+    # Each page comments the code in its own language; the code is the same.
+    russian = recovery_report("docs/failure-modes.ru.md")
+    english = recovery_report("docs/failure-modes.md")
     assert without_comments(russian) == without_comments(english)
 
 
-def run_recovery_report(readme: str) -> dict[str, Any]:
-    scope: dict[str, Any] = {"__name__": "readme_recovery"}
-    exec(compile(recovery_report(readme), readme, "exec"), scope)  # noqa: S102 - our own README
+def run_recovery_report(page: str) -> dict[str, Any]:
+    scope: dict[str, Any] = {"__name__": "docs_recovery"}
+    exec(compile(recovery_report(page), page, "exec"), scope)  # noqa: S102 - our own docs
     return scope
 
 
@@ -100,11 +114,11 @@ async def test_quick_start_sells_refunds_and_ignores_a_repeated_update(
     assert len(session.calls(RefundStarPayment)) == 1
 
 
-@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
+@pytest.mark.parametrize("page", ["docs/failure-modes.md", "docs/failure-modes.ru.md"])
 async def test_recovery_report_tells_the_admin_what_needs_a_person(
-    bot: Bot, session: FakeSession, clock: Clock, readme: str
+    bot: Bot, session: FakeSession, clock: Clock, page: str
 ) -> None:
-    scope = run_recovery_report(readme)
+    scope = run_recovery_report(page)
     report_stuck = scope["report_stuck"]
     storage = MemoryStorage()
     stars = make_stars(storage, clock=clock, refunds=RefundPolicy(max_attempts=1))
@@ -136,11 +150,11 @@ async def test_recovery_report_tells_the_admin_what_needs_a_person(
     )
 
 
-@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
+@pytest.mark.parametrize("page", ["docs/failure-modes.md", "docs/failure-modes.ru.md"])
 async def test_long_recovery_report_is_split_into_messages_telegram_accepts(
-    bot: Bot, session: FakeSession, clock: Clock, readme: str
+    bot: Bot, session: FakeSession, clock: Clock, page: str
 ) -> None:
-    scope = run_recovery_report(readme)
+    scope = run_recovery_report(page)
     storage = MemoryStorage()
     lease = clock.now + timedelta(minutes=10)
     for n in range(20):
@@ -161,14 +175,14 @@ async def test_long_recovery_report_is_split_into_messages_telegram_accepts(
     )
 
 
-@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
+@pytest.mark.parametrize("page", ["docs/failure-modes.md", "docs/failure-modes.ru.md"])
 @pytest.mark.parametrize("parse_mode", [ParseMode.HTML, ParseMode.MARKDOWN_V2])
 async def test_recovery_report_is_plain_text_whatever_the_bot_parses_by_default(
-    clock: Clock, readme: str, parse_mode: ParseMode
+    clock: Clock, page: str, parse_mode: ParseMode
 ) -> None:
     # Many bots set a default parse mode. The errors in the report are not markup, and Telegram
     # refuses a message whose text does not parse ("can't parse entities").
-    scope = run_recovery_report(readme)
+    scope = run_recovery_report(page)
     session = FakeSession()
     bot = Bot(TOKEN, session=session, default=DefaultBotProperties(parse_mode=parse_mode))
     storage = MemoryStorage()
@@ -187,3 +201,65 @@ async def test_recovery_report_is_plain_text_whatever_the_bot_parses_by_default(
     assert session.prepare_value(report.parse_mode, bot=bot, files={}) is None, (
         "the report is sent without a parse mode"
     )
+
+
+def test_both_testing_pages_have_the_same_sample() -> None:
+    assert bot_testing_sample("docs/testing.ru.md") == bot_testing_sample("docs/testing.md")
+
+
+async def test_testing_sample_passes() -> None:
+    scope: dict[str, Any] = {"__name__": "docs_testing"}
+    code = compile(bot_testing_sample("docs/testing.md"), "docs/testing.md", "exec")
+    exec(code, scope)  # noqa: S102 - our own docs
+    await scope["test_a_payment_delivered_twice_is_handled_once"]()
+
+
+def anchors(path: Path) -> set[str]:
+    """The anchors GitHub gives the headings of the Markdown file at ``path``."""
+    found = set()
+    in_code = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("```"):
+            in_code = not in_code
+        elif not in_code and line.startswith("#"):
+            heading = line.lstrip("#").strip().lower()
+            found.add(re.sub(r"[^\w\- ]", "", heading).replace(" ", "-"))
+    return found
+
+
+def broken_links(document: Path) -> list[str]:
+    """Links in ``document`` to files of this repository or headings that do not exist."""
+    broken = []
+    for target in LINK.findall(document.read_text(encoding="utf-8")):
+        if target.startswith(REPOSITORY):
+            relative = target.removeprefix(REPOSITORY)
+            base = ROOT
+        elif "://" in target or target.startswith("mailto:"):
+            continue
+        else:
+            relative = target
+            base = document.parent
+        name, _, anchor = relative.partition("#")
+        path = base / name if name else document
+        if not path.exists() or (anchor and anchor not in anchors(path)):
+            broken.append(target)
+    return broken
+
+
+@pytest.mark.skipif(
+    not (ROOT / ".git").exists(), reason="the sdist leaves out some of the files the docs link"
+)
+@pytest.mark.parametrize("document", DOCUMENTS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_links_point_at_files_and_headings_that_exist(document: Path) -> None:
+    assert broken_links(document) == []
+
+
+def test_readme_links_the_documentation_pages() -> None:
+    for readme, suffix in [("README.md", ".md"), ("README.ru.md", ".ru.md")]:
+        text = (ROOT / readme).read_text(encoding="utf-8")
+        pages = sorted(ROOT.glob(f"docs/*{suffix}"))
+        if suffix == ".md":
+            pages = [page for page in pages if not page.name.endswith(".ru.md")]
+        assert pages, "docs/ has no pages"
+        for page in pages:
+            assert f"{REPOSITORY}docs/{page.name}" in text, f"{readme} does not link {page.name}"
